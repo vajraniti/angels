@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fundingDial, jitteredArc, polar } from '../js/ui/clock.js';
+import { fundingDial, jitteredArc, polar, tickSide } from '../js/ui/clock.js';
 
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 9, 13, 20, 45, 0);
@@ -79,4 +79,19 @@ test('jitteredArc is a deterministic polyline that stays near the circle', () =>
   const end = pts[pts.length - 1];
   assert.ok(Math.abs(end[0] - 200) < 1 && Math.abs(end[1] - 100) < 1, 'ends at the index');
   assert.throws(() => jitteredArc({ ...args, a0: 1, a1: 0 }), RangeError);
+});
+
+test('a settlement hour goes inside the ring when it would reach the funding figures', () => {
+  // Mobile dial (r 45): 2 h 40 m before settlement the outside label met the countdown.
+  const mobileAngle = ((2 * 60 + 40) / (24 * 60)) * Math.PI * 2;
+  assert.equal(tickSide({ r: 45, angle: mobileAngle, reach: 28, capHeight: 9 }), -1);
+  // Right by the index the label would sit on the figures at any radius.
+  assert.equal(tickSide({ r: 120, angle: 0.1, reach: 28, capHeight: 9 }), -1);
+  assert.equal(tickSide({ r: 120, angle: -0.1, reach: 28, capHeight: 9 }), -1);
+});
+
+test('a settlement hour stays outside the ring once it is clear of the figures', () => {
+  assert.equal(tickSide({ r: 45, angle: Math.PI / 2, reach: 28, capHeight: 9 }), 1);
+  assert.equal(tickSide({ r: 120, angle: -Math.PI / 2, reach: 28, capHeight: 9 }), 1);
+  assert.equal(tickSide({ r: 120, angle: Math.PI, reach: 28, capHeight: 9 }), 1);
 });

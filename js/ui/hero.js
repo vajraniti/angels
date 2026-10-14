@@ -8,7 +8,7 @@
 
 import { $, $$, fill, fillGrouped, setDirection, setText } from './dom.js';
 import { createMass, measureGlyphs } from './mass.js';
-import { fundingDial, jitteredArc, polar } from './clock.js';
+import { fundingDial, jitteredArc, polar, tickSide } from './clock.js';
 import { heroColumn } from './kanji.js';
 import { symbolView } from './view.js';
 import { SYMBOL_INFO } from '../config.js';
@@ -33,12 +33,10 @@ const TRACKING = Object.freeze({ XAUUSDT: 0, CLUSDT: 0.24 });
  */
 const PRICE_REACH = Object.freeze({ XAUUSDT: [0.56, 0.42], CLUSDT: [0.3, 0.3] });
 const MOBILE_MAX = 760;
-/**
- * A settlement tick closer than this to the dial's index (radians, about 25°) is set
- * inside the ring: outside it, its hour label would print over the funding rate or the
- * countdown, which sit just above the index.
- */
-const NEAR_INDEX = 0.44;
+/** Cap height of the dial's hour labels (10–11 px Archivo), rounded up. */
+const HOUR_LABEL_CAP = 9;
+/** Advance of one character of those labels (Archivo at 75 % width), rounded up. */
+const HOUR_LABEL_CHAR = 5.5;
 const MINUTE = 60_000;
 
 /** @typedef {import('../market.js').MarketState} MarketState */
@@ -251,20 +249,41 @@ export function createHero(root) {
       }
       // Only the settlement that opened this interval and the one it runs to: the
       // others would land in the price and say nothing the countdown does not.
-      for (const t of dial.ticks) {
-        if (!t.next && !t.prev) continue;
-        const len = t.next ? 13 : 8;
-        // Near the index the tick and its hour go inside the ring, clear of the figures.
-        const dir = Math.abs(t.angle) < NEAR_INDEX ? -1 : 1;
-        const a = polar(cx, cy, r + dir * 4, t.angle);
-        const b = polar(cx, cy, r + dir * (4 + len), t.angle);
-        out += `<path class="stroke" stroke-width="${t.next ? 1.1 : 0.8}" d="M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(
+      const marks = dial.ticks
+        .filter((t) => t.next || t.prev)
+        .map((t) => {
+          const len = t.next ? 13 : 8;
+          // Inside the ring whenever the hour would reach up into the funding figures.
+          const dir = tickSide({ r, angle: t.angle, reach: 4 + len + 11, capHeight: HOUR_LABEL_CAP });
+          const text = t.next ? `${t.hour}\u2009UTC` : t.hour;
+          return {
+            t,
+            a: polar(cx, cy, r + dir * 4, t.angle),
+            b: polar(cx, cy, r + dir * (4 + len), t.angle),
+            p: polar(cx, cy, r + dir * (4 + len + 11), t.angle),
+            text,
+            width: text.length * HOUR_LABEL_CHAR,
+          };
+        });
+      // On a small ring both hours can land inside, side by side, and read as one
+      // string ("08 12 UTC"): the closing hour keeps its label, the opening one only
+      // its tick.
+      const [m0, m1] = marks;
+      if (
+        m0 &&
+        m1 &&
+        Math.abs(m0.p.x - m1.p.x) < (m0.width + m1.width) / 2 + 4 &&
+        Math.abs(m0.p.y - m1.p.y) < HOUR_LABEL_CAP + 3
+      ) {
+        for (const m of marks) if (m.t.prev) m.text = '';
+      }
+      for (const m of marks) {
+        out += `<path class="stroke" stroke-width="${m.t.next ? 1.1 : 0.8}" d="M${m.a.x.toFixed(1)} ${m.a.y.toFixed(
           1,
-        )} ${b.y.toFixed(1)}"/>`;
-        const p = polar(cx, cy, r + dir * (4 + len + 11), t.angle);
-        out += `<text class="h" x="${p.x.toFixed(1)}" y="${(p.y + 4).toFixed(1)}" text-anchor="middle">${t.hour}${
-          t.next ? '\u2009UTC' : ''
-        }</text>`;
+        )}L${m.b.x.toFixed(1)} ${m.b.y.toFixed(1)}"/>`;
+        if (m.text) {
+          out += `<text class="h" x="${m.p.x.toFixed(1)}" y="${(m.p.y + 4).toFixed(1)}" text-anchor="middle">${m.text}</text>`;
+        }
       }
       // Now: the dial's fixed index, the first red mark of this screen.
       out += `<path class="redstroke" stroke-width="1.5" d="M${top.x} ${top.y + 8}V${top.y - 9}"/>`;

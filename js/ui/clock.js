@@ -80,6 +80,23 @@ function utcHour(t) {
 }
 
 /**
+ * Which side of the ring a settlement tick and its hour label go on. Outside (1) reads
+ * best, but the funding rate and the countdown are set in the band just above the
+ * ring's top, so a label whose top would reach into that band goes inside (-1).
+ * Heights are measured up from the dial's centre; the label's baseline sits 4 px
+ * below its anchor point (see dialMarkup).
+ * @param {{ r: number, angle: number, reach: number, capHeight: number, clearance?: number }} p
+ *        `reach`: radial distance from the ring to the label anchor; `clearance`: how far
+ *        above the ring's top the figures' lowest point sits (descenders included)
+ * @returns {1|-1}
+ */
+export function tickSide({ r, angle, reach, capHeight, clearance = 7 }) {
+  const labelTop = (r + reach) * Math.cos(angle) - 4 + capHeight;
+  // 3 px of air between the label and the figures.
+  return labelTop < r + clearance - 3 ? 1 : -1;
+}
+
+/**
  * Point on the dial.
  * @param {number} cx
  * @param {number} cy
