@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   inferDecimals,
+  parseExchangeInfo,
   parseFundingInfo,
   parseKlineEvent,
   parseKlinesRest,
@@ -12,12 +13,15 @@ import {
   parseServerTime,
   parseTicker24hrRest,
   parseTickerEvent,
+  stepDecimals,
 } from '../js/parse.js';
+import { symbolView } from '../js/ui/view.js';
 import { MarketError } from '../js/errors.js';
 
 const fixture = (/** @type {string} */ rel) =>
   JSON.parse(readFileSync(new URL(`./fixtures/${rel}`, import.meta.url), 'utf8'));
 const docs = fixture('docs-examples.json');
+const live = fixture('live/fapi-2026-10-14.json');
 
 /** @param {() => unknown} fn @param {RegExp} pattern */
 function throwsParse(fn, pattern) {
@@ -80,9 +84,10 @@ test('open interest: official example, quantity precision read from the string',
 
 test('funding info: listed symbols get their hours, unlisted ones null', () => {
   assert.deepEqual(parseFundingInfo(docs.fundingInfo.body, ['BLZUSDT', 'CLUSDT']), { BLZUSDT: 8, CLUSDT: null });
-  assert.deepEqual(parseFundingInfo(fixture('rest/fundingInfo.json'), ['XAUUSDT', 'CLUSDT']), {
-    XAUUSDT: 8,
-    CLUSDT: null,
+  assert.deepEqual(parseFundingInfo(fixture('rest/fundingInfo.json'), ['XAUUSDT', 'CLUSDT', 'ETHUSDT']), {
+    XAUUSDT: 4,
+    CLUSDT: 4,
+    ETHUSDT: null,
   });
   throwsParse(() => parseFundingInfo({}, ['XAUUSDT']), /expected a JSON array/);
   throwsParse(
@@ -191,9 +196,10 @@ test('missing or non-numeric fields name the field and the payload', () => {
   throwsParse(() => parseServerTime({ serverTime: 'soon' }), /serverTime/);
 });
 
-test('inferDecimals: precision strings count as-is, 8-decimal padding only for its significant digits', () => {
+test('inferDecimals: every string counts only for its digits before trailing zeros', () => {
   assert.equal(inferDecimals(['4164.96', '4168.90', '4170.86']), 2);
-  assert.equal(inferDecimals(['48.1200']), 4);
+  assert.equal(inferDecimals(['48.1200']), 2, 'padding of any length is ignored');
+  assert.equal(inferDecimals(['93.66000', '94.43000', '91.06000']), 2, 'CLUSDT pads to 5 places on a 0.01 tick');
   assert.equal(inferDecimals(['4164.96000000']), 2);
   assert.equal(inferDecimals(['94.25400000']), 3);
   assert.equal(inferDecimals(['100.00000000', '0.10000000']), 1);
@@ -203,4 +209,70 @@ test('inferDecimals: precision strings count as-is, 8-decimal padding only for i
   assert.equal(inferDecimals(['-0.81']), 2);
   assert.equal(inferDecimals([]), null);
   assert.equal(inferDecimals(['abc', '', '1e5']), null);
+});
+
+test('stepDecimals reads a tick or step through its padding', () => {
+  assert.equal(stepDecimals('0.01000'), 2);
+  assert.equal(stepDecimals('0.01'), 2);
+  assert.equal(stepDecimals('0.5'), 1);
+  assert.equal(stepDecimals('1'), 0);
+  assert.equal(stepDecimals('10.00'), 0);
+  assert.equal(stepDecimals('0.00001000'), 5);
+  assert.equal(stepDecimals(''), null);
+  assert.equal(stepDecimals(0.01), null, 'a number is not what fapi sends');
+});
+
+test('live CLUSDT (2026-10-14): padded strings and the tick both give 2 decimals on the page', () => {
+  const t = parseTicker24hrRest(live['ticker24hr-CLUSDT'], 'CLUSDT');
+  assert.equal(live['ticker24hr-CLUSDT'].lastPrice, '93.26000');
+  const k = parseKlinesRest(live['klines-CLUSDT-15m'], live.exchangeInfo.serverTime, 'klines CLUSDT 15m');
+  assert.equal(inferDecimals([...t.priceStrings, ...k.priceStrings]), 2);
+  const steps = parseExchangeInfo(live.exchangeInfo, ['XAUUSDT', 'CLUSDT']);
+  assert.deepEqual(steps, {
+    XAUUSDT: { priceDecimals: 2, qtyDecimals: 3 },
+    CLUSDT: { priceDecimals: 2, qtyDecimals: 2 },
+  });
+  const v = symbolView(
+    {
+      symbol: 'CLUSDT',
+      last: t.last,
+      open24h: t.open,
+      change24h: Number((t.last - t.open).toFixed(2)),
+      changePct24h: ((t.last - t.open) / t.open) * 100,
+      high24h: t.high,
+      low24h: t.low,
+      quoteVolume24h: t.quoteVolume,
+      markPrice: null,
+      indexPrice: null,
+      fundingRate: null,
+      nextFundingTime: null,
+      fundingIntervalHours: 4,
+      openInterest: null,
+      openInterestValue: null,
+      priceDecimals: steps.CLUSDT?.priceDecimals ?? null,
+      qtyDecimals: 2,
+      rangePercentile30d: null,
+      updatedAt: 0,
+    },
+    0,
+  );
+  assert.equal(v.last, '93.26');
+  assert.equal(v.change, '+1.92');
+  assert.equal(v.high, '94.43');
+});
+
+test('live open interest and fundingInfo parse as the page expects', () => {
+  assert.equal(parseOpenInterest(live['openInterest-CLUSDT'], 'CLUSDT').qtyDecimals, 2);
+  assert.equal(parseOpenInterest(live['openInterest-XAUUSDT'], 'XAUUSDT').qtyDecimals, 3);
+  assert.deepEqual(parseFundingInfo(live.fundingInfo, ['XAUUSDT', 'CLUSDT']), { XAUUSDT: 4, CLUSDT: 4 });
+});
+
+test('parseExchangeInfo: unknown symbols map to null, a broken tick is a parse error', () => {
+  assert.deepEqual(parseExchangeInfo({ symbols: [] }, ['XAUUSDT']), { XAUUSDT: null });
+  throwsParse(() => parseExchangeInfo({ symbols: 'x' }, ['XAUUSDT']), /"symbols" is not an array/);
+  throwsParse(
+    () =>
+      parseExchangeInfo({ symbols: [{ symbol: 'XAUUSDT', filters: [{ filterType: 'PRICE_FILTER' }] }] }, ['XAUUSDT']),
+    /PRICE_FILTER\.tickSize is missing/,
+  );
 });

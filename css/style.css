@@ -196,30 +196,61 @@ button {
 .hero__echo {
   z-index: 0;
 }
+.hero__ink {
+  z-index: 1;
+}
+/* Both copies of the sharp layer sit above the dots and are masked by js/ui/mass.js:
+   the paper copy to where the mass is dense, the ink copy to everywhere else. */
 .crisp {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 2;
   pointer-events: none;
   color: var(--ink);
   user-select: none;
-}
-.hero__ink {
-  z-index: 2;
-}
-.crisp--paper {
-  z-index: 3;
-  color: var(--paper);
-  visibility: hidden;
-  /* The mask has one pixel per dot; scaled up it must stay square-edged. */
+  /* One mask pixel per CSS pixel; scaled up it must stay square-edged. */
   image-rendering: pixelated;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;
   mask-size: 100% 100%;
 }
+.crisp--paper {
+  z-index: 3;
+  color: var(--paper);
+  visibility: hidden;
+}
 .crisp--paper.is-masked {
   visibility: visible;
+}
+/* Each copy clears the grain around its own shapes with a thin halo in the other
+   colour (a stroke painted under the fill): paper around the ink copy, black around
+   the paper copy. A figure crossing the mass's thinning edge keeps one clean outline
+   instead of dissolving into the dots, and a Didone hairline set in paper over the
+   dense core is not lost among the core's few white dots. */
+.crisp {
+  --halo: var(--paper);
+}
+.crisp--paper {
+  --halo: var(--ink-1bit);
+}
+.crisp :is(.price, .change, .script) {
+  -webkit-text-stroke: 5px var(--halo);
+  paint-order: stroke fill;
+}
+.crisp :is(.change, .script) {
+  -webkit-text-stroke-width: 4px;
+}
+.crisp .geo text {
+  stroke: var(--halo);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  paint-order: stroke fill;
+}
+.crisp .geo path:not(.stroke, .redstroke) {
+  stroke: var(--halo);
+  stroke-width: 4px;
+  paint-order: stroke fill;
 }
 .geo {
   position: absolute;
@@ -228,8 +259,12 @@ button {
   height: 100%;
   overflow: visible;
 }
-.geo text {
+.geo text,
+.geo path {
+  /* Ink in the ink copy, paper in the paper copy: the cross turns white inside the X. */
   fill: currentColor;
+}
+.geo text {
   font-family: var(--archivo);
 }
 .geo .n {
@@ -292,13 +327,14 @@ button {
 [data-main='CLUSDT'] .pricebox {
   right: -3vw;
 }
-/* A thin space at display sizes reads as no gap at all; groups get a real one. */
+/* A thin space at display sizes reads as no gap at all; groups get a real one. The
+   smaller sizes need more: the tabular 1 that often follows carries wide bearings. */
 .price .grp + .grp {
   margin-left: 0.17em;
 }
 .second__p .grp + .grp,
 .p2__price .grp + .grp {
-  margin-left: 0.12em;
+  margin-left: 0.2em;
 }
 .change {
   margin: 0.32em 0 0 0.04em;
@@ -430,7 +466,9 @@ button {
   font-weight: 300;
 }
 .peri--vol {
-  left: 35vw;
+  /* Right of the script word's column (one em of it past --script-x), which on a
+     narrow window, or for oil's L, stands further right than usual. */
+  left: max(35vw, calc(var(--script-x, 22.5vw) + clamp(90px, 10.5vw, 160px) + 10px));
   top: 26px;
   display: flex;
   align-items: flex-start;
@@ -441,17 +479,23 @@ button {
   transform: rotate(180deg);
   line-height: 1;
 }
-/* Open interest climbs the right edge, reading upward like the left margin. */
+/* Open interest climbs the right edge, reading upward like the left margin. Both
+   right-edge columns end above the price's top (--price-top, set by js/ui/hero.js):
+   on a short window they break into a second column instead of running into it. */
 .peri--oi {
   right: 26px;
   top: 26px;
+  max-height: calc(var(--price-top, 60vh) - 26px - 14px);
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  display: flex;
-  align-items: center;
+  white-space: normal;
+  line-height: 1.25;
 }
 .peri--oi .peri__l {
   margin-inline-end: 10px;
+}
+.peri--oi :is(.peri__l, .peri__q) {
+  white-space: nowrap;
 }
 
 .mincho {
@@ -459,6 +503,7 @@ button {
   z-index: 4;
   right: 62px;
   top: 26px;
+  max-height: calc(var(--price-top, 60vh) - 26px - 14px);
   writing-mode: vertical-rl;
   font-family: var(--mincho);
   font-size: 15px;
@@ -560,6 +605,11 @@ button {
 [data-status='stale'] .tk--status b {
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+}
+/* The mosaic samples the brightest pixel of each block, so under it the paper halo of
+   the ink copy would turn the figures into paper blocks: no halo while it applies. */
+:is([data-status='stale'], [data-reveal]) .crisp :is(.price, .change) {
+  -webkit-text-stroke-width: 0;
 }
 /* Loading: the first figures come into focus from coarse blocks (600 ms, set by JS). */
 [data-reveal='8'] :is(.price, .p2__price) {
@@ -701,7 +751,10 @@ button {
   --em-x: calc(-1 * var(--m) - var(--bleed)); /* emblem left, in body coordinates */
   --sq-r: calc(var(--em-x) + var(--em-w) * 0.945); /* right edge of Fludd's black square */
   --p2-price-x: calc(var(--sq-r) - 0.62em);
-  --p2-price-y: 128px;
+  /* The figures sit in the top of the square, between its upper edge (7 % of the
+     emblem's height) and the vertical "Et sic in infinitum" in the right margin
+     (from 35 %), so the inscription never runs under a digit. */
+  --p2-price-y: 22px;
 }
 .p2__cap {
   margin-bottom: 26px;
@@ -925,13 +978,25 @@ button {
 
 /* ------------------------------------------------------------ narrower desktops */
 
-@media (min-width: 761px) and (max-width: 1180px) {
-  .peri--oi {
-    display: none;
+/* Tablets: the tape's two groups take a line each instead of wrapping raggedly, and
+   the decorative Mincho column gives its place to the open interest and the dial. */
+@media (min-width: 761px) and (max-width: 900px) {
+  :root {
+    --tape-h: 58px;
+  }
+  .tape {
+    display: block;
+    padding: 5px var(--m) 6px;
+  }
+  .tape__row {
+    gap: 2px 22px;
   }
   .mincho {
-    right: 26px;
+    display: none;
   }
+}
+
+@media (min-width: 761px) and (max-width: 1180px) {
   .second__p {
     font-size: 44px;
   }
@@ -969,6 +1034,16 @@ button {
   .tk--time {
     margin-left: 0;
   }
+  /* Narrow phones: tighter caps keep the tape to its two lines (--tape-h). */
+  @media (max-width: 389px) {
+    .tape__row {
+      gap: 2px 10px;
+    }
+    .tk b {
+      margin-right: 0.4em;
+      letter-spacing: 0.12em;
+    }
+  }
 
   .hero {
     height: calc(100svh - var(--tape-h));
@@ -994,9 +1069,6 @@ button {
   .marg {
     display: none;
   }
-  .roles {
-    top: 6px;
-  }
   .peri--vol {
     left: auto;
     right: var(--m);
@@ -1013,6 +1085,7 @@ button {
     left: var(--m);
     top: var(--below-price, 70%);
     bottom: auto;
+    max-height: none;
     writing-mode: horizontal-tb;
     transform: none;
     display: block;
@@ -1062,15 +1135,32 @@ button {
   .plate__canvas {
     height: 400px;
   }
+  /* Touch targets of at least 44 px; the type keeps its size, only the hit box grows. */
   .switch button {
+    min-height: 44px;
     padding: 8px 5px;
+  }
+  .switch--tf {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  .switch--tf button {
+    min-width: 44px;
+  }
+  .roles button {
+    min-height: 44px;
+    padding-inline: 10px;
+  }
+  .roles {
+    top: -2px;
+    left: calc(var(--m) - 10px);
   }
 
   .p2 {
     padding: 56px var(--m) 72px;
     --em-w: 216px;
     --bleed: 0px;
-    --p2-price-y: 64px;
+    --p2-price-y: 14px;
   }
   .p2__body {
     display: block;
@@ -1086,10 +1176,17 @@ button {
     margin-left: calc(var(--m) + 24px);
   }
   .p2__price {
-    font-size: 72px;
+    font-size: 58px;
   }
   .p2__data {
     padding: 28px 0 0;
+  }
+  /* The change stays with its price, beside the square, not after the caption. */
+  [data-emblem='dark'] .p2__change {
+    position: absolute;
+    top: calc(var(--p2-price-y) + 58px);
+    left: calc(var(--sq-r) + 16px);
+    margin: 0;
   }
   /* Gold's emblem is light line work: no inversion to borrow, and no room beside it
      on a phone, so the price sets under the emblem, whole. */

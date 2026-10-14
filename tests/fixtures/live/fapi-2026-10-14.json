@@ -1,0 +1,216 @@
+{
+  "_note": "Real fapi replies for regression tests, read through www.binance.com/fapi (the same API, reachable where fapi.binance.com is region-blocked) on 2026-10-14. exchangeInfo is cut to the two symbols; everything else is verbatim.",
+  "ticker24hr-CLUSDT": {
+    "closeTime": 1791969263673,
+    "count": 606921,
+    "firstId": 117071655,
+    "highPrice": "94.43000",
+    "lastId": 117679215,
+    "lastPrice": "93.26000",
+    "lastQty": "0.66",
+    "lowPrice": "91.06000",
+    "openPrice": "91.34000",
+    "openTime": 1791882840000,
+    "priceChange": "1.92000",
+    "priceChangePercent": "2.102",
+    "quoteVolume": "807393691.43370",
+    "symbol": "CLUSDT",
+    "volume": "8671634.84",
+    "weightedAvgPrice": "93.10744"
+  },
+  "ticker24hr-XAUUSDT": {
+    "closeTime": 1791969272490,
+    "count": 1117987,
+    "firstId": 200717559,
+    "highPrice": "4197.26",
+    "lastId": 201841061,
+    "lastPrice": "4150.82",
+    "lastQty": "0.177",
+    "lowPrice": "4148.16",
+    "openPrice": "4192.69",
+    "openTime": 1791882840000,
+    "priceChange": "-41.87",
+    "priceChangePercent": "-0.999",
+    "quoteVolume": "1946239567.32",
+    "symbol": "XAUUSDT",
+    "volume": "466701.442",
+    "weightedAvgPrice": "4170.20"
+  },
+  "premiumIndex-CLUSDT": {
+    "symbol": "CLUSDT",
+    "markPrice": "93.27009403",
+    "indexPrice": "93.30332837",
+    "estimatedSettlePrice": "93.48894117",
+    "lastFundingRate": "0.00000000",
+    "interestRate": "0.00000000",
+    "nextFundingTime": 1791979200000,
+    "time": 1791969275639
+  },
+  "openInterest-CLUSDT": { "symbol": "CLUSDT", "openInterest": "2516235.78", "time": 1791969263673 },
+  "openInterest-XAUUSDT": { "symbol": "XAUUSDT", "openInterest": "144427.392", "time": 1791969271225 },
+  "klines-CLUSDT-15m": [
+    [
+      1791966600000,
+      "93.30000",
+      "93.60000",
+      "93.23000",
+      "93.58000",
+      "68048.97",
+      1791967499999,
+      "6356746.0780000",
+      6289,
+      "44061.73",
+      "4116680.3669000",
+      "0"
+    ],
+    [
+      1791967500000,
+      "93.57000",
+      "93.72000",
+      "93.46000",
+      "93.49000",
+      "96394.77",
+      1791968399999,
+      "9018830.2668000",
+      5267,
+      "64589.68",
+      "6042925.3291000",
+      "0"
+    ],
+    [
+      1791968400000,
+      "93.50000",
+      "93.56000",
+      "93.14000",
+      "93.26000",
+      "53588.54",
+      1791969299999,
+      "5000203.8280000",
+      7550,
+      "27348.04",
+      "2552126.7633000",
+      "0"
+    ]
+  ],
+  "fundingInfo": [
+    {
+      "symbol": "XAUUSDT",
+      "adjustedFundingRateCap": "0.00500000",
+      "adjustedFundingRateFloor": "-0.00500000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1769796333728
+    },
+    {
+      "symbol": "CLUSDT",
+      "adjustedFundingRateCap": "0.00500000",
+      "adjustedFundingRateFloor": "-0.00500000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1774959060359
+    }
+  ],
+  "exchangeInfo": {
+    "timezone": "UTC",
+    "serverTime": 1791969277777,
+    "futuresType": "U_MARGINED",
+    "symbols": [
+      {
+        "symbol": "XAUUSDT",
+        "pair": "XAUUSDT",
+        "contractType": "TRADIFI_PERPETUAL",
+        "deliveryDate": 4133404800000,
+        "onboardDate": 1765440300000,
+        "status": "TRADING",
+        "maintMarginPercent": "2.5000",
+        "requiredMarginPercent": "5.0000",
+        "baseAsset": "XAU",
+        "quoteAsset": "USDT",
+        "marginAsset": "USDT",
+        "pricePrecision": 2,
+        "quantityPrecision": 3,
+        "baseAssetPrecision": 8,
+        "quotePrecision": 8,
+        "underlyingType": "COMMODITY",
+        "underlyingSubType": ["TradFi"],
+        "triggerProtect": "0.0200",
+        "liquidationFee": "0.015000",
+        "marketTakeBound": "0.02",
+        "maxMoveOrderLimit": 10000,
+        "filters": [
+          { "tickSize": "0.01", "minPrice": "0.01", "filterType": "PRICE_FILTER", "maxPrice": "200000" },
+          { "minQty": "0.001", "stepSize": "0.001", "filterType": "LOT_SIZE", "maxQty": "10000" },
+          { "minQty": "0.001", "filterType": "MARKET_LOT_SIZE", "stepSize": "0.001", "maxQty": "1000" },
+          { "limit": 200, "filterType": "MAX_NUM_ORDERS" },
+          { "notional": "5", "filterType": "MIN_NOTIONAL" },
+          {
+            "multiplierDown": "0.9800",
+            "multiplierUp": "1.0200",
+            "multiplierDecimal": "4",
+            "filterType": "PERCENT_PRICE"
+          },
+          { "positionControlSide": "NONE", "filterType": "POSITION_RISK_CONTROL" }
+        ],
+        "orderTypes": [
+          "LIMIT",
+          "MARKET",
+          "STOP",
+          "STOP_MARKET",
+          "TAKE_PROFIT",
+          "TAKE_PROFIT_MARKET",
+          "TRAILING_STOP_MARKET"
+        ],
+        "timeInForce": ["GTC", "IOC", "FOK", "GTX", "GTD"],
+        "permissionSets": ["GRID", "COPY", "RPI", "DCA", "PSB"]
+      },
+      {
+        "symbol": "CLUSDT",
+        "pair": "CLUSDT",
+        "contractType": "TRADIFI_PERPETUAL",
+        "deliveryDate": 4133404800000,
+        "onboardDate": 1775034000000,
+        "status": "TRADING",
+        "maintMarginPercent": "2.5000",
+        "requiredMarginPercent": "5.0000",
+        "baseAsset": "CL",
+        "quoteAsset": "USDT",
+        "marginAsset": "USDT",
+        "pricePrecision": 5,
+        "quantityPrecision": 2,
+        "baseAssetPrecision": 8,
+        "quotePrecision": 8,
+        "underlyingType": "COMMODITY",
+        "underlyingSubType": ["TradFi"],
+        "triggerProtect": "0.0300",
+        "liquidationFee": "0.015000",
+        "marketTakeBound": "0.03",
+        "maxMoveOrderLimit": 10000,
+        "filters": [
+          { "tickSize": "0.01000", "maxPrice": "20000", "minPrice": "0.01000", "filterType": "PRICE_FILTER" },
+          { "minQty": "0.01", "filterType": "LOT_SIZE", "maxQty": "500000", "stepSize": "0.01" },
+          { "stepSize": "0.01", "maxQty": "50000", "minQty": "0.01", "filterType": "MARKET_LOT_SIZE" },
+          { "limit": 200, "filterType": "MAX_NUM_ORDERS" },
+          { "filterType": "MIN_NOTIONAL", "notional": "5" },
+          {
+            "multiplierUp": "1.0300",
+            "multiplierDecimal": "4",
+            "multiplierDown": "0.9700",
+            "filterType": "PERCENT_PRICE"
+          },
+          { "positionControlSide": "NONE", "filterType": "POSITION_RISK_CONTROL" }
+        ],
+        "orderTypes": [
+          "LIMIT",
+          "MARKET",
+          "STOP",
+          "STOP_MARKET",
+          "TAKE_PROFIT",
+          "TAKE_PROFIT_MARKET",
+          "TRAILING_STOP_MARKET"
+        ],
+        "timeInForce": ["GTC", "IOC", "FOK", "GTX", "GTD"],
+        "permissionSets": ["GRID", "COPY", "RPI", "DCA", "PSB"]
+      }
+    ]
+  }
+}

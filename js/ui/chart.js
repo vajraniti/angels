@@ -2,7 +2,8 @@
 // right only, hollow up and solid down candles, the forming candle screened with an
 // ordered Bayer pattern inside its own body, 1 px barcode volume, dotted 24 h high
 // and low, a dimension line for the visible range, and one red tick at the last price.
-// Canvas, sized to the device pixel ratio and redrawn on resize.
+// Canvas, sized to the device pixel ratio. It is redrawn only while on screen and only
+// when something it shows has changed; the arrow keys read it candle by candle.
 
 import { formatNumber, formatPrice, formatCompact, formatUtcClock, formatUtcDate } from '../format.js';
 import {
@@ -19,6 +20,11 @@ import {
 import { $, pixelRatio, reducedMotion, setText } from './dom.js';
 import { chartNote } from './kanji.js';
 
+/**
+ * Off screen the plate is kept roughly current, so a print or a full-page capture
+ * shows it, but not redrawn at the pace of the stream: at most this often.
+ */
+const OFFSCREEN_REFRESH_MS = 10_000;
 const INK = '#111111';
 const PAPER = '#fbfbf9';
 const RED = '#a3121c';
@@ -36,9 +42,12 @@ const INTERVAL_NAME = Object.freeze({
 
 /**
  * @param {HTMLElement} root the Plate I section
- * @param {{ serverNow: () => number }} clock
+ * @param {{ serverNow: () => number, redElsewhere?: Element|null }} options `redElsewhere`:
+ *        an element carrying this screen's other red marks (the hero's funding dial);
+ *        while it is on screen the last price is marked in ink, so no screen ever
+ *        shows more than two red marks.
  */
-export function createChart(root, { serverNow }) {
+export function createChart(root, { serverNow, redElsewhere = null }) {
   const canvas = /** @type {HTMLCanvasElement} */ ($('[data-chart]', root));
   const msg = $('[data-chart-msg]', root);
   const ohlc = $('[data-chart-ohlc]', root);
@@ -49,7 +58,19 @@ export function createChart(root, { serverNow }) {
   let state = null;
   /** @type {{ x: number, y: number }|null} */
   let pointer = null;
+  /**
+   * Candle read with the arrow keys, counted back from the newest; null when none.
+   * @type {number|null}
+   */
+  let keyBack = null;
   let queued = false;
+  /** Whether the canvas is on screen; drawing off screen only costs. */
+  let visible = true;
+  let redQuiet = false;
+  let drawnKey = '';
+  /** What kind of picture was drawn last (which chart, its newest candle, size). */
+  let drawnShape = '';
+  let drawnAt = -Infinity;
   /** @type {{ offset: number, step: number, count: number, start: number, P: { l: number, r: number, t: number }, priceH: number, min: number, max: number }|null} */
   let geom = null;
   let revealUntil = 0;
@@ -68,12 +89,58 @@ export function createChart(root, { serverNow }) {
     });
   }
 
+  /**
+   * Everything the picture depends on, so an update that changes none of it costs
+   * nothing. The forming candle's screen is quantised to its 16 Bayer levels.
+   * @param {MarketState} st
+   * @param {number} W
+   * @param {number} H
+   * @param {number} dpr
+   */
+  function inputsKey(st, W, H, dpr) {
+    const ch = st.chart;
+    const sym = st.symbols[ch.symbol];
+    const lastCandle = ch.candles.at(-1);
+    const level = lastCandle && !lastCandle.closed ? Math.floor(formingFraction(lastCandle, serverNow()) * 16) : -1;
+    return [
+      W,
+      H,
+      dpr,
+      ch.symbol,
+      ch.interval,
+      ch.loading,
+      ch.error?.message ?? '',
+      ch.candles.length,
+      lastCandle
+        ? `${lastCandle.t}:${lastCandle.o}:${lastCandle.h}:${lastCandle.l}:${lastCandle.c}:${lastCandle.q}`
+        : '',
+      sym.last,
+      sym.high24h,
+      sym.low24h,
+      sym.priceDecimals,
+      pointer ? `${pointer.x},${pointer.y}` : '',
+      keyBack,
+      level,
+      redQuiet,
+    ].join('|');
+  }
+
   function draw() {
     if (!state) return;
     const W = canvas.clientWidth;
     const H = canvas.clientHeight;
     if (!W || !H) return;
     const dpr = pixelRatio();
+    const t0 = performance.now();
+    const revealing = t0 < revealUntil;
+    const key = inputsKey(state, W, H, dpr);
+    if (key === drawnKey && !revealing) return;
+    // A new candle, another chart or another size is drawn at once even off screen.
+    const shape = `${state.chart.symbol}|${state.chart.interval}|${state.chart.candles.at(-1)?.t}|${W}x${H}|${dpr}`;
+    if (!visible && shape === drawnShape && t0 - drawnAt < OFFSCREEN_REFRESH_MS) return;
+    drawnKey = key;
+    drawnShape = shape;
+    drawnAt = t0;
     const bw = Math.round(W * dpr);
     const bh = Math.round(H * dpr);
     if (canvas.width !== bw || canvas.height !== bh) {
@@ -263,22 +330,32 @@ export function createChart(root, { serverNow }) {
       ctx.fillText(timeLabel(cs[i].t, ch.interval), x, H - 8);
     }
 
-    // The last price: this screen's one red mark.
+    // The last price: this screen's one red mark, in ink while the hero's red marks
+    // are on screen too.
     const lastPrice = cs[cs.length - 1].c;
     {
       const y = Math.round(Y(lastPrice));
-      ctx.fillStyle = RED;
+      ctx.fillStyle = redQuiet ? INK : RED;
       ctx.fillRect(W - P.r + 2, y, mobile ? 6 : 12, 1);
       ctx.textAlign = 'right';
       setFont(ctx, 600, 11.5, 'condensed');
       ctx.fillText(formatPrice(lastPrice, dec), W - 8, y + 4);
     }
 
-    // Pointer: two hairlines to the frame and a ring, value on the axis.
-    const hover = pointer && geom ? candleAt(pointer.x, geom) : -1;
-    if (hover >= 0 && pointer) {
+    // Pointer or keyboard cursor: two hairlines to the frame and a ring, value on the axis.
+    let hover = -1;
+    let py = 0;
+    if (keyBack !== null) {
+      hover = Math.max(0, cs.length - 1 - keyBack);
+      keyBack = cs.length - 1 - hover;
+      py = Y(cs[hover].c);
+    } else if (pointer && geom) {
+      hover = candleAt(pointer.x, geom);
+      py = pointer.y;
+    }
+    if (hover >= 0) {
       const x = Math.round(X(hover)) + 0.5;
-      const yy = Math.round(Math.max(P.t, Math.min(P.t + priceH, pointer.y))) + 0.5;
+      const yy = Math.round(Math.max(P.t, Math.min(P.t + priceH, py))) + 0.5;
       ctx.strokeStyle = INK;
       ctx.lineWidth = 0.6;
       ctx.beginPath();
@@ -298,27 +375,51 @@ export function createChart(root, { serverNow }) {
       ctx.textAlign = 'right';
       setFont(ctx, 500, 11, 'condensed');
       ctx.fillText(formatPrice(v, dec), W - 8, yy + 4);
-      showOhlc(cs[hover], dec, false);
+      showOhlc(cs[hover], dec, hover === cs.length - 1);
     } else {
       showOhlc(cs[cs.length - 1], dec, true);
     }
 
-    // First data after loading comes in through a Bayer screen, not a skeleton.
+    // First data after loading comes in through a Bayer screen, not a skeleton: one
+    // fill with a repeating 4×4 tile per frame (a fillRect per cell cost a second of
+    // main thread per reveal where canvas has no GPU).
     const t = performance.now();
-    if (t < revealUntil) {
+    if (revealing) {
       const left = (revealUntil - t) / 600;
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = PAPER;
-      const cell = Math.max(1, Math.round(2 * dpr));
-      for (let yy = 0; yy < bh; yy += cell) {
-        for (let xx = 0; xx < bw; xx += cell) {
-          if (bayerOn(xx / cell, yy / cell, left)) ctx.fillRect(xx, yy, cell, cell);
-        }
-      }
+      ctx.fillStyle = screenPattern(ctx, Math.round(left * 16), Math.max(1, Math.round(2 * dpr)));
+      ctx.fillRect(0, 0, bw, bh);
       ctx.restore();
       schedule();
     }
+  }
+
+  /** @type {Map<string, HTMLCanvasElement>} */
+  const screenTiles = new Map();
+  /**
+   * A paper screen at `level`/16 density as a repeating pattern of `cell`-px dots.
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {number} level 0..16
+   * @param {number} cell device pixels per screen dot
+   */
+  function screenPattern(ctx, level, cell) {
+    const key = `${level}|${cell}`;
+    let tile = screenTiles.get(key);
+    if (!tile) {
+      tile = document.createElement('canvas');
+      tile.width = tile.height = 4 * cell;
+      const tctx = tile.getContext('2d');
+      if (!tctx) throw new Error('Plate I: this browser gives no 2D canvas');
+      tctx.fillStyle = PAPER;
+      for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 4; x++) if (bayerOn(x, y, level / 16)) tctx.fillRect(x * cell, y * cell, cell, cell);
+      }
+      screenTiles.set(key, tile);
+    }
+    const pattern = ctx.createPattern(tile, 'repeat');
+    if (!pattern) throw new Error('Plate I: the canvas refused the screen pattern');
+    return pattern;
   }
 
   /**
@@ -368,8 +469,45 @@ export function createChart(root, { serverNow }) {
     pointer = { x: e.clientX - r.left, y: e.clientY - r.top };
     schedule();
   }
-  canvas.addEventListener('pointermove', onPointer);
+  canvas.addEventListener('pointermove', (e) => {
+    keyBack = null;
+    onPointer(e);
+  });
   canvas.addEventListener('pointerdown', onPointer);
+  // Keyboard reading: ← and → step through the candles, Home and End jump to the
+  // oldest and newest on the plate, Escape returns to the forming candle.
+  // While the plate has keyboard focus the read-out speaks; under the pointer, where
+  // it changes with every move, it stays quiet.
+  canvas.addEventListener('focus', () => {
+    if (keyBack === null) keyBack = 0;
+    ohlc.setAttribute('aria-live', 'polite');
+    schedule();
+  });
+  canvas.addEventListener('blur', () => {
+    keyBack = null;
+    ohlc.setAttribute('aria-live', 'off');
+    schedule();
+  });
+  canvas.addEventListener('keydown', (e) => {
+    const count = geom?.count ?? 0;
+    if (!count) return;
+    const back = keyBack ?? 0;
+    const next =
+      e.key === 'ArrowLeft'
+        ? back + 1
+        : e.key === 'ArrowRight'
+          ? back - 1
+          : e.key === 'Home'
+            ? count - 1
+            : e.key === 'End' || e.key === 'Escape'
+              ? 0
+              : null;
+    if (next === null) return;
+    e.preventDefault();
+    keyBack = Math.max(0, Math.min(count - 1, next));
+    pointer = null;
+    schedule();
+  });
   canvas.addEventListener('pointerleave', () => {
     pointer = null;
     schedule();
@@ -381,6 +519,23 @@ export function createChart(root, { serverNow }) {
   });
 
   new ResizeObserver(() => schedule()).observe(canvas);
+  if (typeof IntersectionObserver === 'function') {
+    // A margin, so the OHLC line under the plate is current when it scrolls in first.
+    new IntersectionObserver(
+      ([entry]) => {
+        visible = entry.isIntersecting;
+        if (visible) schedule();
+      },
+      { rootMargin: '160px 0px' },
+    ).observe(canvas);
+    if (redElsewhere) {
+      new IntersectionObserver(([entry]) => {
+        if (redQuiet === entry.isIntersecting) return;
+        redQuiet = entry.isIntersecting;
+        schedule();
+      }).observe(redElsewhere);
+    }
+  }
 
   return {
     /** @param {MarketState} next */
@@ -398,9 +553,11 @@ export function createChart(root, { serverNow }) {
           b.setAttribute('aria-pressed', String(/** @type {HTMLElement} */ (b).dataset.interval === ch.interval));
         }
         pointer = null;
+        if (keyBack !== null) keyBack = 0;
       }
       const loading = ch.candles.length === 0;
-      if (wasLoading && !loading && !reducedMotion()) revealUntil = performance.now() + 600;
+      // The Bayer reveal is for a reader watching; off screen the plate simply appears.
+      if (wasLoading && !loading && !reducedMotion() && visible) revealUntil = performance.now() + 600;
       wasLoading = loading;
       schedule();
     },

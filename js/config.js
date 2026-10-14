@@ -43,7 +43,7 @@ export const REACHABILITY_PROBE_URL = 'https://data-api.binance.vision/api/v3/pi
 export const REST_TIMEOUT_MS = 10_000;
 export const PROBE_TIMEOUT_MS = 5_000;
 
-/** Candles requested for the chart (weight 2 for 100..499). */
+/** Candles requested for the chart (weight 2 for limit 100..499; the 1d ranges use 31, weight 1). */
 export const KLINE_LIMIT = 300;
 /** Upper bound of candles kept in memory while the stream appends new ones. */
 export const CHART_MAX_CANDLES = 500;
@@ -81,6 +81,20 @@ export const REST_BACKOFF = Object.freeze({ baseMs: 2_000, capMs: 60_000 });
 
 /** How often the market re-evaluates live/stale status. */
 export const STATUS_TICK_MS = 1_000;
+
+/**
+ * When the stream has been silent this long (or never opened: a proxy or a corporate
+ * network that blocks WebSockets but lets HTTPS through), prices and funding are
+ * polled over REST instead, so the page does not freeze at its first figures.
+ */
+export const FALLBACK_AFTER_MS = 5_000;
+/** Cadence of that REST fallback: ticker/24hr + premiumIndex per symbol, weight 4 a round. */
+export const FALLBACK_EVERY_MS = 12_000;
+/**
+ * Polled figures count as current (status "polling") while the last successful round
+ * is at most this old: two missed rounds plus one request timeout.
+ */
+export const POLL_FRESH_MS = 2 * FALLBACK_EVERY_MS + REST_TIMEOUT_MS;
 
 /** Daily candles compared against today's 24 h range. */
 export const RANGE_DAYS = 30;

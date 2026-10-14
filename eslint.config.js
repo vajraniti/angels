@@ -31,6 +31,8 @@ const browser = {
   getComputedStyle: 'readonly',
   HTMLElement: 'readonly',
   Image: 'readonly',
+  ImageData: 'readonly',
+  IntersectionObserver: 'readonly',
   location: 'readonly',
   matchMedia: 'readonly',
   navigator: 'readonly',

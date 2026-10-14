@@ -191,8 +191,10 @@ export function parseOpenInterest(body, expectSymbol) {
   return {
     symbol,
     openInterest: num(b.openInterest, 'openInterest', ctx),
-    // fapi prints quantities at the contract's quantity precision ("10659.509").
-    qtyDecimals: inferDecimals([String(b.openInterest)]) ?? 0,
+    // fapi prints open interest at the contract's quantity step, unpadded
+    // ("144427.392" for XAUUSDT, "2516235.78" for CLUSDT, 2026-10-14), so the string's
+    // own length is right here; exchangeInfo's LOT_SIZE step overrides it when known.
+    qtyDecimals: fractionLength(String(b.openInterest)),
     at: num(b.time, 'time', ctx),
   };
 }
@@ -242,7 +244,7 @@ export function parseKlinesRest(body, serverNow, ctx = 'klines') {
   const priceStrings = [];
   body.forEach((row, i) => {
     const rctx = `${ctx} row ${i}`;
-    if (!Array.isArray(row) || row.length < 9) {
+    if (!Array.isArray(row) || row.length < 12) {
       throw new MarketError(
         'parse',
         `${rctx}: expected an array of 12 fields, got ${JSON.stringify(row)?.slice(0, 60)}`,
@@ -305,14 +307,17 @@ export function parseKlineEvent(data) {
 }
 
 /**
- * Decimal places to print a price with, read from the strings Binance sends.
+ * Fallback for the decimals a price prints with, read from the strings Binance sends,
+ * used only until /fapi/v1/exchangeInfo has given the tick size.
  *
- * fapi prints traded prices at the symbol's price precision ("4164.96", trailing zeros
- * kept, e.g. "4168.90"), but pads mark/index prices to 8 places ("4164.96000000").
- * So a string with fewer than 8 decimals counts as-is, and an 8-decimal string only
- * counts for the digits left after trailing zeros are stripped. The maximum over all
- * samples wins, which also copes with any source that trims zeros.
- * (Observed on testnet.binancefuture.com, the same fapi software, 2026-10-13.)
+ * fapi pads its price strings beyond the tick: XAUUSDT trades at a 0.01 tick and
+ * prints "4164.96", but CLUSDT, also at a 0.01 tick, prints "93.66000" (its
+ * pricePrecision is 5), and mark/index prices are padded to 8 places. So no string's
+ * length can be trusted: each counts only for the digits left after its trailing
+ * zeros are stripped, and the maximum over all samples wins. A sample whose last
+ * digit happens to be 0 ("4168.90") can under-count, which is why the caller keeps
+ * the maximum over the session and the tick size overrides it.
+ * (Live replies checked through www.binance.com/fapi, 2026-10-14.)
  * @param {Iterable<string>} strings
  * @returns {number|null} null when no sample is a number
  */
@@ -320,9 +325,64 @@ export function inferDecimals(strings) {
   let best = null;
   for (const s of strings) {
     if (typeof s !== 'string' || !/^-?\d+(\.\d+)?$/.test(s)) continue;
-    const frac = s.includes('.') ? s.slice(s.indexOf('.') + 1) : '';
-    const d = frac.length >= 8 ? frac.replace(/0+$/, '').length : frac.length;
-    best = Math.max(best ?? 0, Math.min(d, 8));
+    best = Math.max(best ?? 0, Math.min(stepDecimals(s) ?? 0, 8));
   }
   return best;
+}
+
+/**
+ * Digits after the decimal point as printed, padding included: "2516235.78" → 2.
+ * @param {string} s
+ */
+function fractionLength(s) {
+  const dot = s.indexOf('.');
+  return dot === -1 ? 0 : s.length - dot - 1;
+}
+
+/**
+ * Decimal places of a step or tick given as a decimal string, ignoring padding:
+ * "0.01000" → 2, "0.5" → 1, "1" → 0, "10.00" → 0. Null for anything else.
+ * @param {unknown} step
+ * @returns {number|null}
+ */
+export function stepDecimals(step) {
+  if (typeof step !== 'string' || !/^-?\d+(\.\d+)?$/.test(step)) return null;
+  const dot = step.indexOf('.');
+  return dot === -1 ? 0 : step.slice(dot + 1).replace(/0+$/, '').length;
+}
+
+/**
+ * GET /fapi/v1/exchangeInfo: the tick size (PRICE_FILTER.tickSize) and quantity step
+ * (LOT_SIZE.stepSize) of each wanted symbol, as decimal places. The tick is the only
+ * reliable source for how many decimals a price has: Binance documents
+ * pricePrecision as "please do not use it as tickSize", and the price strings are
+ * padded to it (CLUSDT: pricePrecision 5, tickSize "0.01000").
+ * A wanted symbol that is missing maps to null; the caller keeps its fallback.
+ * @param {unknown} body
+ * @param {readonly string[]} symbols
+ * @returns {Record<string, { priceDecimals: number, qtyDecimals: number|null }|null>}
+ */
+export function parseExchangeInfo(body, symbols) {
+  const ctx = 'exchange information';
+  const b = obj(body, ctx);
+  if (!Array.isArray(b.symbols)) throw new MarketError('parse', `${ctx}: field "symbols" is not an array`);
+  /** @type {Record<string, { priceDecimals: number, qtyDecimals: number|null }|null>} */
+  const out = Object.fromEntries(symbols.map((s) => [s, null]));
+  for (const entry of b.symbols) {
+    if (!entry || typeof entry !== 'object' || !symbols.includes(entry.symbol)) continue;
+    const sctx = `${ctx} for ${entry.symbol}`;
+    if (!Array.isArray(entry.filters)) throw new MarketError('parse', `${sctx}: field "filters" is not an array`);
+    const filter = (/** @type {string} */ type) =>
+      entry.filters.find((/** @type {any} */ f) => f && typeof f === 'object' && f.filterType === type);
+    const price = filter('PRICE_FILTER');
+    const priceDecimals = stepDecimals(price?.tickSize);
+    if (priceDecimals === null) {
+      throw new MarketError(
+        'parse',
+        `${sctx}: PRICE_FILTER.tickSize is missing or not a decimal (${JSON.stringify(price?.tickSize)})`,
+      );
+    }
+    out[entry.symbol] = { priceDecimals, qtyDecimals: stepDecimals(filter('LOT_SIZE')?.stepSize) };
+  }
+  return out;
 }

@@ -6,7 +6,9 @@
 // - how far the letters fall apart: the 24 h range's percentile among the last 30
 //   daily ranges, quantised to 8 steps so a tick never re-renders the mass;
 // - which way they fall apart: the leading edge faces the 24 h move (up-right when
-//   up, down-right when down) and stays hard, the grain trails behind it.
+//   up, down-right when down) and stays hard, the grain trails behind it. The move's
+//   sign and size are read with hysteresis (moveOf), so a flat day that crosses its
+//   24 h open a hundred times does not re-render the mass a hundred times.
 
 /** Output codes of renderDissolve. */
 export const PAPER = 0;
@@ -59,26 +61,59 @@ export function echoBucket(changePct) {
   return 1 + Math.min(3, Math.floor(Math.abs(changePct) / 0.75));
 }
 
+/** Within this many percent of the 24 h open the trail keeps its side (hysteresis). */
+export const SIGN_DEADBAND_PCT = 0.05;
+/** The echo bucket moves only once the change is this far past a bucket boundary. */
+export const BUCKET_MARGIN_PCT = 0.1;
+
+/**
+ * @typedef {{ sign: -1|0|1, bucket: number }} Move
+ * The quantised 24 h move that shapes the mass: which side the grain trails to and
+ * how far the grey echo sits.
+ */
+
+/**
+ * The 24 h move as the mass reads it, with hysteresis against the previous reading:
+ * the sign flips only once the change leaves a ±SIGN_DEADBAND_PCT band around zero,
+ * and the echo bucket moves only once the change is BUCKET_MARGIN_PCT past the
+ * boundary. The change is recomputed from the forming candle four times a second, so
+ * without this a price hovering at its 24 h open would re-render the mass on ticks.
+ * @param {Move|null} prev the reading in use, or null for a fresh start
+ * @param {number|null|undefined} changePct
+ * @returns {Move}
+ */
+export function moveOf(prev, changePct) {
+  if (typeof changePct !== 'number' || !Number.isFinite(changePct)) return { sign: 0, bucket: 0 };
+  const raw = changePct > 0 ? 1 : changePct < 0 ? -1 : 0;
+  const abs = Math.abs(changePct);
+  if (!prev || prev.bucket === 0) return { sign: raw, bucket: echoBucket(changePct) };
+  const sign = raw === prev.sign || abs >= SIGN_DEADBAND_PCT ? raw : prev.sign;
+  const up = echoBucket(Math.max(0, abs - BUCKET_MARGIN_PCT));
+  const down = echoBucket(abs + BUCKET_MARGIN_PCT);
+  const bucket = prev.bucket < up ? up : prev.bucket > down ? down : prev.bucket;
+  return { sign, bucket };
+}
+
 /**
  * Every input that changes the picture, quantised. The page re-renders the mass only
  * when this key changes (or the layout does), never on a price tick.
- * @param {{ percentile: number|null, changePct: number|null }} p
+ * @param {{ percentile: number|null, move: Move }} p
  */
-export function massKey({ percentile, changePct }) {
-  const t = trailOf(changePct);
-  return `${blurStep(percentile) ?? 'none'}|${t.x},${t.y}|${echoBucket(changePct)}`;
+export function massKey({ percentile, move }) {
+  const t = trailOf(move.sign);
+  return `${blurStep(percentile) ?? 'none'}|${t.x},${t.y}|${move.bucket}`;
 }
 
 /**
  * Render parameters for a mass of type size `size` (px) and width `massWidth` (px).
  * Returns null blur when the percentile is unknown: the page then prints only a pale
  * latent impression instead of encoding a volatility it does not know.
- * @param {{ percentile: number|null, changePct: number|null, size: number, massWidth: number }} p
+ * @param {{ percentile: number|null, move: Move, size: number, massWidth: number }} p
  */
-export function massParams({ percentile, changePct, size, massWidth }) {
+export function massParams({ percentile, move, size, massWidth }) {
   const step = blurStep(percentile);
-  const trail = trailOf(changePct);
-  const bucket = echoBucket(changePct);
+  const trail = trailOf(move.sign);
+  const bucket = move.bucket;
   // 3.7 % to 7.3 % of the mass width: the critique asked for at least 3–4 %.
   const echo = bucket === 0 ? 0 : (0.025 + 0.012 * bucket) * massWidth;
   if (step === null) return { step, sigma: size * 0.045, trailLength: 0, trail, echo: { x: 0, y: 0 }, latent: true };
@@ -260,29 +295,95 @@ function level(v) {
 }
 
 /**
- * Turn glyph coverage into a 1-bit impression.
- * @param {{
+ * @typedef {{
  *   alpha: Float32Array, width: number, height: number,
  *   sigma: number, trailLength: number, trail: { x: -1|0|1, y: -1|0|1 },
  *   echo?: { x: number, y: number }, echoDensity?: number,
  *   seed: number, farGain?: number, density?: number,
- * }} p  `alpha` is 0..1 coverage per pixel; `density` < 1 thins the whole mass
- *       (used for the latent impression before the market has answered).
+ * }} DissolveArgs  `alpha` is 0..1 coverage per pixel; `density` < 1 thins the whole
+ *       mass (used for the latent impression before the market has answered).
+ */
+
+/**
+ * Turn glyph coverage into a 1-bit impression.
+ * @param {DissolveArgs} p
  * @returns {Uint8Array} PAPER, INK or ECHO per pixel
  */
-export function renderDissolve({
-  alpha,
-  width: w,
-  height: h,
-  sigma,
-  trailLength,
-  trail,
-  echo = { x: 0, y: 0 },
-  echoDensity = 0.33,
-  seed,
-  farGain = 1,
-  density = 1,
-}) {
+export function renderDissolve(p) {
+  return dissolve(p, null).codes;
+}
+
+/** Ink density from which the sharp layer inverts as a whole (see renderLayers). */
+export const SOLID_AT = 0.75;
+
+/**
+ * Everything the page paints, as RGBA buffers ready for ImageData, so the browser's
+ * main thread does no per-pixel work (this runs in the worker):
+ * - `ink`:   the black dots (#000), transparent elsewhere;
+ * - `echo`:  the grey echo dots, or every dot in the pale latent colour;
+ * - `solid`: opaque where the mass's ink density is at least `solidAt` (null when
+ *   latent). The sharp layer is set in paper inside this region and in ink outside
+ *   it. Decided per region, not per dot: a glyph masked dot by dot becomes the
+ *   complement of the grain in the transition band, with the same texture as the
+ *   grain around it, and dissolves (the hero price lost half its digits that way).
+ *   One smooth boundary gives each glyph one clean edge between its two states.
+ * @param {DissolveArgs & {
+ *   latent: boolean, solidAt?: number,
+ *   colors: { echo: readonly number[], latent: readonly number[] },
+ * }} p
+ */
+export function renderLayers(p) {
+  const solidAt = p.latent ? null : (p.solidAt ?? SOLID_AT);
+  const { codes, solid } = dissolve(p, solidAt);
+  const n = codes.length;
+  const ink = new Uint8ClampedArray(n * 4);
+  const echo = new Uint8ClampedArray(n * 4);
+  const grey = p.latent ? p.colors.latent : p.colors.echo;
+  const pale = p.colors.latent;
+  for (let i = 0; i < n; i++) {
+    const code = codes[i];
+    if (code === PAPER) continue;
+    const j = i * 4;
+    if (code === INK && !p.latent) {
+      ink[j + 3] = 255;
+    } else {
+      const rgb = code === ECHO ? grey : pale;
+      echo[j] = rgb[0];
+      echo[j + 1] = rgb[1];
+      echo[j + 2] = rgb[2];
+      echo[j + 3] = 255;
+    }
+  }
+  /** @type {Uint8ClampedArray|null} */
+  let solidRgba = null;
+  if (solid) {
+    solidRgba = new Uint8ClampedArray(n * 4);
+    for (let i = 0; i < n; i++) if (solid[i]) solidRgba[i * 4 + 3] = 255;
+  }
+  return { ink, echo, solid: solidRgba };
+}
+
+/**
+ * @param {DissolveArgs} p
+ * @param {number|null} solidAt also mark where the eroded ink density reaches this
+ * @returns {{ codes: Uint8Array, solid: Uint8Array|null }}
+ */
+function dissolve(
+  {
+    alpha,
+    width: w,
+    height: h,
+    sigma,
+    trailLength,
+    trail,
+    echo = { x: 0, y: 0 },
+    echoDensity = 0.33,
+    seed,
+    farGain = 1,
+    density = 1,
+  },
+  solidAt,
+) {
   if (alpha.length !== w * h)
     throw new RangeError(`renderDissolve: alpha has ${alpha.length} values, expected ${w * h}`);
   const near = gaussBlur(alpha, w, h, sigma);
@@ -298,6 +399,7 @@ export function renderDissolve({
   const hasEcho = ex !== 0 || ey !== 0;
   const cell = Math.max(8, sigma * 2.2);
   const out = new Uint8Array(w * h);
+  const solid = solidAt === null ? null : new Uint8Array(w * h);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -307,6 +409,9 @@ export function renderDissolve({
         // Uneven erosion: the edge bites deeper in some places than in others.
         v += valueNoise(x, y, cell, seed) * 0.9 * v * (1 - v);
       }
+      // The smooth density before the dots are drawn: its contour is the boundary
+      // between the paper and the ink copy of the sharp layer.
+      if (solid !== null && v * density >= /** @type {number} */ (solidAt)) solid[i] = 1;
       if (v * density > hash01(x, y, seed)) {
         out[i] = INK;
         continue;
@@ -325,7 +430,7 @@ export function renderDissolve({
       }
     }
   }
-  return out;
+  return { codes: out, solid };
 }
 
 /**
@@ -335,22 +440,4 @@ export function renderDissolve({
 function maxInto(a, b) {
   for (let i = 0; i < a.length; i++) if (b[i] > a[i]) a[i] = b[i];
   return a;
-}
-
-/**
- * Bounding box and centroid of the INK pixels, for tests and layout checks.
- * @param {Uint8Array} out
- * @param {number} w
- */
-export function inkStats(out, w) {
-  let n = 0;
-  let sx = 0;
-  let sy = 0;
-  for (let i = 0; i < out.length; i++) {
-    if (out[i] !== INK) continue;
-    n++;
-    sx += i % w;
-    sy += Math.floor(i / w);
-  }
-  return { count: n, cx: n ? sx / n : NaN, cy: n ? sy / n : NaN };
 }

@@ -15,18 +15,23 @@
 //   GET /fapi/v1/premiumIndex?symbol  weight 1   mark/index price, last funding rate, next funding time
 //   GET /fapi/v1/fundingInfo          weight 0   (shares 500/5 min/IP with /fundingRate) adjusted intervals
 //   GET /fapi/v1/openInterest?symbol  weight 1   open interest, no stream exists
-//   GET /fapi/v1/klines               weight 2   (limit 100..499) chart and 1d ranges
+//   GET /fapi/v1/klines               weight 2   (limit 100..499) chart; weight 1 (limit 31) 1d ranges
 //   GET /fapi/v1/time                 weight 1   clock offset
+//   GET /fapi/v1/exchangeInfo         weight 1   tick size per symbol (about 1.1 MB, 52 KB gzipped):
+//                                                once per session, then with the hourly refresh
 // WS   https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market
 //   <symbol>@ticker (2000 ms), <symbol>@markPrice@1s, <symbol>@kline_<interval> (250 ms)
 
 import {
   CHART_MAX_CANDLES,
   DEFAULT_CHART,
+  FALLBACK_AFTER_MS,
+  FALLBACK_EVERY_MS,
   FUNDING_INTERVAL_DEFAULT_H,
   INTERVALS,
   KLINE_LIMIT,
   OI_POLL_MS,
+  POLL_FRESH_MS,
   RANGE_DAYS,
   RANGE_MIN_DAYS,
   REACHABILITY_PROBE_URL,
@@ -42,6 +47,7 @@ import { createRestClient } from './rest.js';
 import { backoffDelay, createStreamClient } from './stream.js';
 import {
   inferDecimals,
+  parseExchangeInfo,
   parseFundingInfo,
   parseKlineEvent,
   parseKlinesRest,
@@ -80,8 +86,10 @@ import { MarketError, isAbort, toErrorInfo } from './errors.js';
  * @property {number|null} openInterestValue USDT: openInterest × markPrice (last price until a mark arrives).
  *                                           Mark, not last: Binance values positions at mark price,
  *                                           and mark is not moved by a single print.
- * @property {number|null} priceDecimals     Decimals Binance quotes this symbol with (read from its strings).
- * @property {number|null} qtyDecimals       Decimals of contract quantities (from the open-interest string).
+ * @property {number|null} priceDecimals     Decimals of the symbol's tick size (exchangeInfo PRICE_FILTER);
+ *                                           until that arrives, the most read from its price strings.
+ * @property {number|null} qtyDecimals       Decimals of contract quantities (exchangeInfo LOT_SIZE step,
+ *                                           or the open-interest string until then).
  * @property {number|null} rangePercentile30d 0–100: where (high24h − low24h) ranks among the last 30
  *                                           closed daily ranges (ties count half). Null with < 10 days.
  * @property {number|null} updatedAt         Local ms of the last change to any field.
@@ -97,11 +105,13 @@ import { MarketError, isAbort, toErrorInfo } from './errors.js';
  */
 
 /**
- * @typedef {'connecting'|'live'|'stale'|'error'} MarketStatus
+ * @typedef {'connecting'|'live'|'polling'|'stale'|'error'} MarketStatus
  * - connecting: no data yet and nothing has failed for good; or data arrived but the
  *   stream has not delivered within its first STALE_AFTER_MS.
- * - live: the stream is open and delivered within STALE_AFTER_MS.
- * - stale: data is shown but the stream is down or silent for longer than STALE_AFTER_MS.
+ * - live: the stream delivered within STALE_AFTER_MS.
+ * - polling: the stream is down or never opened, and prices come from the REST
+ *   fallback, whose last successful round is at most POLL_FRESH_MS old.
+ * - stale: data is shown but neither the stream nor the fallback is delivering.
  * - error: no data at all and the initial load failed (see `error`; it retries by itself).
  */
 
@@ -111,25 +121,56 @@ import { MarketError, isAbort, toErrorInfo } from './errors.js';
  * @property {ErrorInfo|null} error   The most important active problem, null when none. Priority:
  *                                    bootstrap > stream > openInterest > fundingInfo > dailyRange > serverTime.
  * @property {number|null} lastMessageAt Local ms of the last stream data message.
+ * @property {number|null} dataAt     Binance server ms of the newest price or mark actually applied
+ *                                    (stream event time or REST reply time), null until one arrives.
+ *                                    The page's "last update … ago" and "Last figures …" read it.
  * @property {number|null} clockSkew  serverTime − localTime in ms (from /fapi/v1/time), null until known.
  * @property {Record<string, SymbolState>} symbols
  * @property {ChartState} chart
  */
 
-const ERROR_PRIORITY = ['bootstrap', 'stream', 'openInterest', 'fundingInfo', 'dailyRange', 'serverTime'];
+const ERROR_PRIORITY = [
+  'bootstrap',
+  'stream',
+  'openInterest',
+  'fundingInfo',
+  'exchangeInfo',
+  'dailyRange',
+  'serverTime',
+];
 
 /**
  * Pure status rule, separated for tests.
- * @param {{ hasData: boolean, fatal: boolean, connected: boolean, lastMessageAt: number|null,
- *           startedAt: number, now: number, staleAfterMs: number }} p
+ *
+ * Live depends on the age of the newest stream message alone, not on whether a socket
+ * is open at this instant: a reconnect (the planned 24 h recycle, or a drop that is
+ * back within a second) leaves data well under STALE_AFTER_MS old, and calling it
+ * stale would flash the stale mosaic for nothing. A socket that is open but silent is
+ * caught by the same age rule, and the stream's watchdog replaces it.
+ * @param {{ hasData: boolean, fatal: boolean, lastMessageAt: number|null, polledAt: number|null,
+ *           startedAt: number, now: number, staleAfterMs: number, pollFreshMs: number }} p
+ *        times in local ms; `polledAt` is the last successful REST round of prices
  * @returns {MarketStatus}
  */
-export function computeStatus({ hasData, fatal, connected, lastMessageAt, startedAt, now, staleAfterMs }) {
+export function computeStatus({ hasData, fatal, lastMessageAt, polledAt, startedAt, now, staleAfterMs, pollFreshMs }) {
   if (!hasData) return fatal ? 'error' : 'connecting';
-  if (connected && lastMessageAt !== null && now - lastMessageAt <= staleAfterMs) return 'live';
-  // REST data arrived first; give the stream its grace period before calling it stale.
+  if (lastMessageAt !== null && now - lastMessageAt <= staleAfterMs) return 'live';
+  // REST data arrived first; give the stream its grace period before saying it is not there.
   if (lastMessageAt === null && now - startedAt <= staleAfterMs) return 'connecting';
+  if (polledAt !== null && now - polledAt <= pollFreshMs) return 'polling';
   return 'stale';
+}
+
+/**
+ * Settle every promise; whatever succeeded has already been applied by its own
+ * handler, so one failing symbol never hides the other. Then fail with the first
+ * failure, so the task's error slot and retry still see it.
+ * @param {Promise<unknown>[]} jobs
+ */
+async function allApplied(jobs) {
+  const results = await Promise.allSettled(jobs);
+  const failed = results.find((r) => r.status === 'rejected');
+  if (failed) throw /** @type {PromiseRejectedResult} */ (failed).reason;
 }
 
 /**
@@ -192,6 +233,7 @@ export function createMarket({
     status: 'connecting',
     error: null,
     lastMessageAt: null,
+    dataAt: null,
     clockSkew: null,
     symbols: Object.fromEntries(symbols.map((s) => [s, emptySymbol(s)])),
     chart: { symbol: chart.symbol, interval: chart.interval, candles: [], loading: true, error: null },
@@ -203,6 +245,11 @@ export function createMarket({
   );
   /** @type {Record<string, number[]|null>} closed daily ranges per symbol */
   const ranges = Object.fromEntries(symbols.map((s) => [s, null]));
+  /**
+   * Tick and quantity-step decimals per symbol from exchangeInfo; null until it answers.
+   * @type {Record<string, { priceDecimals: number, qtyDecimals: number|null }|null>}
+   */
+  const steps = Object.fromEntries(symbols.map((s) => [s, null]));
   /** @type {Map<string, ErrorInfo>} */
   const errors = new Map();
   /** @type {Set<(state: MarketState) => void>} */
@@ -215,6 +262,11 @@ export function createMarket({
   let started = false;
   let session = 0;
   let startedAt = 0;
+  /**
+   * Local ms of the last fully successful REST round of prices (bootstrap or fallback).
+   * @type {number|null}
+   */
+  let polledAt = null;
   let emitQueued = false;
   /** @type {ReturnType<typeof createRestClient>|null} */
   let rest = null;
@@ -260,11 +312,12 @@ export function createMarket({
     return computeStatus({
       hasData,
       fatal: errors.has('bootstrap'),
-      connected: stream?.info().connected ?? false,
       lastMessageAt: s.lastMessageAt,
+      polledAt,
       startedAt,
       now: now(),
       staleAfterMs: STALE_AFTER_MS,
+      pollFreshMs: POLL_FRESH_MS,
     });
   }
 
@@ -313,12 +366,17 @@ export function createMarket({
   /**
    * @param {string} sym
    * @param {Partial<SymbolState>} patch
+   * @param {number|null} [at] server time of the price data in `patch`, which moves
+   *        `dataAt`; null for data that is not a price (open interest, ranges, steps)
    */
-  function patchSymbol(sym, patch) {
+  function patchSymbol(sym, patch, at = null) {
     const prev = state.symbols[sym];
     if (!prev) return;
     const next = derive(sym, { ...prev, ...patch, updatedAt: now() });
-    commit({ symbols: { ...state.symbols, [sym]: next } });
+    /** @type {Partial<MarketState>} */
+    const top = { symbols: { ...state.symbols, [sym]: next } };
+    if (at !== null && (state.dataAt === null || at > state.dataAt)) top.dataAt = at;
+    commit(top);
   }
 
   /**
@@ -342,14 +400,16 @@ export function createMarket({
   }
 
   /**
+   * Fallback precision from price strings, used only until exchangeInfo has answered.
    * @param {string} sym
    * @param {Iterable<string>} strings
    * @returns {Partial<SymbolState>} the priceDecimals patch, if it grew
    */
   function decimalsPatch(sym, strings) {
+    if (steps[sym]) return {};
     const found = inferDecimals(strings);
     const cur = state.symbols[sym]?.priceDecimals ?? null;
-    // Only ever grows, so formatted prices never lose a digit mid-session.
+    // Only grows: a sample whose last digit is 0 must not take a digit off the prices.
     return found !== null && (cur === null || found > cur) ? { priceDecimals: found } : {};
   }
 
@@ -368,11 +428,13 @@ export function createMarket({
       quoteVolume24h: t.quoteVolume,
       ...decimalsPatch(t.symbol, t.priceStrings),
     };
+    let at = null;
     if (t.at >= m.lastAt) {
       m.lastAt = t.at;
       patch.last = t.last;
+      at = t.at;
     }
-    patchSymbol(t.symbol, patch);
+    patchSymbol(t.symbol, patch, at);
   }
 
   /** @param {import('./parse.js').MarkInfo} k */
@@ -380,12 +442,16 @@ export function createMarket({
     const m = marks[k.symbol];
     if (!m || k.at < m.markAt) return;
     m.markAt = k.at;
-    patchSymbol(k.symbol, {
-      markPrice: k.markPrice,
-      indexPrice: k.indexPrice,
-      fundingRate: k.fundingRate,
-      nextFundingTime: k.nextFundingTime,
-    });
+    patchSymbol(
+      k.symbol,
+      {
+        markPrice: k.markPrice,
+        indexPrice: k.indexPrice,
+        fundingRate: k.fundingRate,
+        nextFundingTime: k.nextFundingTime,
+      },
+      k.at,
+    );
   }
 
   /** @param {ReturnType<typeof parseKlineEvent>} ev */
@@ -395,15 +461,17 @@ export function createMarket({
     const s = state.symbols[ev.symbol];
     /** @type {Partial<SymbolState>} */
     const patch = decimalsPatch(ev.symbol, ev.priceStrings);
+    let at = null;
     if (ev.at > m.lastAt) {
       // The forming candle's close is the latest trade; it is newer than the 2 s ticker.
       m.lastAt = ev.at;
+      at = ev.at;
       const c = ev.candle.c;
       patch.last = c;
       if (s.high24h !== null && c > s.high24h) patch.high24h = c;
       if (s.low24h !== null && c < s.low24h) patch.low24h = c;
     }
-    if (Object.keys(patch).length) patchSymbol(ev.symbol, patch);
+    if (Object.keys(patch).length) patchSymbol(ev.symbol, patch, at);
 
     const ch = state.chart;
     // Events of the previous chart can still arrive until UNSUBSCRIBE takes effect.
@@ -445,13 +513,16 @@ export function createMarket({
     let attempt = 0;
     /** @type {ReturnType<typeof setTimeout>|null} */
     let timer = null;
-    let running = false;
+    // The session whose run is in flight (0: none). Scoped to the session, not a plain
+    // flag: after stop() and start() in the same tick the aborted run of the old
+    // session has not settled yet, and it must not block the new session's first run.
+    let runningSession = 0;
     async function run() {
       if (timer !== null) clearTimeout(timer);
       timer = null;
-      if (running || !started) return;
-      running = true;
+      if (!started || runningSession === session) return;
       const sess = session;
+      runningSession = sess;
       try {
         await job();
         if (sess !== session) return;
@@ -463,7 +534,7 @@ export function createMarket({
         setError(source, err, now() + delay);
         timer = setTimeout(run, delay);
       } finally {
-        running = false;
+        if (runningSession === sess) runningSession = 0;
       }
     }
     function cancel() {
@@ -471,11 +542,15 @@ export function createMarket({
       timer = null;
       attempt = 0;
     }
-    return { run, cancel };
+    /** A run is in flight or a retry is scheduled: periodic callers leave it alone. */
+    function busy() {
+      return runningSession === session || timer !== null;
+    }
+    return { run, cancel, busy };
   }
 
   const bootstrap = task('bootstrap', async () => {
-    const results = await Promise.allSettled(
+    await allApplied(
       symbols.flatMap((sym) => [
         request('/fapi/v1/ticker/24hr', { symbol: sym }, `Loading 24h statistics for ${sym}`).then((b) =>
           applyTicker(parseTicker24hrRest(b, sym)),
@@ -485,13 +560,11 @@ export function createMarket({
         ),
       ]),
     );
-    // Whatever succeeded is already applied; one failing symbol must not hide the other.
-    const failed = results.find((r) => r.status === 'rejected');
-    if (failed) throw /** @type {PromiseRejectedResult} */ (failed).reason;
+    polledAt = now();
   });
 
-  const openInterest = task('openInterest', async () => {
-    const results = await Promise.allSettled(
+  const openInterest = task('openInterest', () =>
+    allApplied(
       symbols.map(async (sym) => {
         const oi = parseOpenInterest(
           await request('/fapi/v1/openInterest', { symbol: sym }, `Loading open interest for ${sym}`),
@@ -500,20 +573,36 @@ export function createMarket({
         const m = marks[sym];
         if (oi.at < m.oiAt) return;
         m.oiAt = oi.at;
-        patchSymbol(sym, { openInterest: oi.openInterest, qtyDecimals: oi.qtyDecimals });
+        patchSymbol(sym, { openInterest: oi.openInterest, qtyDecimals: steps[sym]?.qtyDecimals ?? oi.qtyDecimals });
       }),
-    );
-    const failed = results.find((r) => r.status === 'rejected');
-    if (failed) throw /** @type {PromiseRejectedResult} */ (failed).reason;
-  });
+    ),
+  );
 
   const fundingInfo = task('fundingInfo', async () => {
     const hours = parseFundingInfo(await request('/fapi/v1/fundingInfo', {}, 'Loading funding intervals'), symbols);
     for (const sym of symbols) patchSymbol(sym, { fundingIntervalHours: hours[sym] ?? FUNDING_INTERVAL_DEFAULT_H });
   });
 
-  const dailyRange = task('dailyRange', async () => {
-    const results = await Promise.allSettled(
+  const exchangeInfo = task('exchangeInfo', async () => {
+    const found = parseExchangeInfo(
+      await request('/fapi/v1/exchangeInfo', {}, 'Loading tick sizes from exchange information'),
+      symbols,
+    );
+    for (const sym of symbols) {
+      const st = found[sym];
+      if (!st) continue;
+      steps[sym] = st;
+      // The tick size is authoritative: set outright, so a padded string ("93.66000")
+      // read before it arrived cannot keep extra digits.
+      /** @type {Partial<SymbolState>} */
+      const patch = { priceDecimals: st.priceDecimals };
+      if (st.qtyDecimals !== null) patch.qtyDecimals = st.qtyDecimals;
+      patchSymbol(sym, patch);
+    }
+  });
+
+  const dailyRange = task('dailyRange', () =>
+    allApplied(
       symbols.map(async (sym) => {
         const body = await request(
           '/fapi/v1/klines',
@@ -524,10 +613,8 @@ export function createMarket({
         ranges[sym] = dailyRanges(candles, RANGE_DAYS);
         patchSymbol(sym, decimalsPatch(sym, priceStrings));
       }),
-    );
-    const failed = results.find((r) => r.status === 'rejected');
-    if (failed) throw /** @type {PromiseRejectedResult} */ (failed).reason;
-  });
+    ),
+  );
 
   const serverTime = task('serverTime', async () => {
     const t0 = now();
@@ -608,7 +695,9 @@ export function createMarket({
       else if (name.includes('@markPrice')) applyMark(parseMarkPriceEvent(data));
       else if (name.includes('@kline_')) applyKlineEvent(parseKlineEvent(data));
       else throw new MarketError('parse', `Live stream: data for unexpected stream "${name}"`);
-      errors.delete('stream');
+      // Data on one stream does not mend a subscription Binance rejected on another:
+      // that error stays until the rejected stream itself delivers.
+      if (!stream?.info().rejected.length) errors.delete('stream');
       commit({ lastMessageAt: now() });
     } catch (err) {
       // A malformed event is a contract break worth seeing in the console, but the
@@ -638,6 +727,7 @@ export function createMarket({
     started = true;
     session++;
     startedAt = now();
+    polledAt = null;
     rest = createRestClient({ base: restBase, fetchImpl, probeUrl });
     stream = createStreamClient({
       base: wsBase,
@@ -659,6 +749,7 @@ export function createMarket({
     bootstrap.run();
     openInterest.run();
     fundingInfo.run();
+    exchangeInfo.run();
     dailyRange.run();
     // The chart waits for the clock offset: a skewed local clock could otherwise mark
     // the forming candle closed, which would freeze it.
@@ -669,11 +760,30 @@ export function createMarket({
       setInterval(() => openInterest.run(), OI_POLL_MS),
       setInterval(() => {
         fundingInfo.run();
+        exchangeInfo.run();
         dailyRange.run();
         serverTime.run();
       }, SLOW_REFRESH_MS),
-      setInterval(() => commit({}), STATUS_TICK_MS),
+      setInterval(() => {
+        pollIfStreamQuiet();
+        commit({});
+      }, STATUS_TICK_MS),
     ];
+  }
+
+  /**
+   * REST fallback while the stream is down or was never able to open: refresh prices
+   * and funding (and the chart's tail) every FALLBACK_EVERY_MS. It stops by itself as
+   * soon as the stream delivers again. A failed round backs off through the task.
+   */
+  function pollIfStreamQuiet() {
+    const t = now();
+    const quietSince = state.lastMessageAt ?? startedAt;
+    if (t - quietSince < FALLBACK_AFTER_MS) return;
+    if (polledAt !== null && t - polledAt < FALLBACK_EVERY_MS) return;
+    if (bootstrap.busy()) return;
+    bootstrap.run();
+    if (!state.chart.loading) loadChart(true);
   }
 
   function stop() {
@@ -682,7 +792,7 @@ export function createMarket({
     session++;
     for (const id of intervals) clearInterval(id);
     intervals = [];
-    for (const t of [bootstrap, openInterest, fundingInfo, dailyRange, serverTime]) t.cancel();
+    for (const t of [bootstrap, openInterest, fundingInfo, exchangeInfo, dailyRange, serverTime]) t.cancel();
     for (const ctrl of inflight) ctrl.abort();
     inflight.clear();
     chartCtrl?.abort();

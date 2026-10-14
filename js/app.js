@@ -10,11 +10,14 @@ import { createPlate2 } from './ui/plate2.js';
 import { createTape } from './ui/tape.js';
 import { createImprint } from './ui/imprint.js';
 import { createAnnouncer } from './ui/announce.js';
-import { announcement, statusView, symbolView } from './ui/view.js';
+import { announceWorthy, announcement, statusView, symbolView } from './ui/view.js';
 
 /** Fonts the canvases draw with; the page waits this long for them, then draws anyway. */
 const FONT_WAIT_MS = 4000;
-/** The polite live region speaks the price at most this often. */
+/**
+ * The polite live region speaks the price at most this often, and only when it is
+ * news (announceWorthy: a new 24 h high or low, or a move of a quarter percent).
+ */
 const ANNOUNCE_EVERY_MS = 20_000;
 
 /** @typedef {import('./market.js').MarketState} MarketState */
@@ -27,7 +30,10 @@ function boot() {
   /** @type {any} */ (window).__angelsMarket = market;
 
   const hero = createHero($('#hero'));
-  const chart = createChart($('#plate1'), { serverNow: market.serverNow });
+  const chart = createChart($('#plate1'), {
+    serverNow: market.serverNow,
+    redElsewhere: $('#hero [data-crisp] [data-geo-dial]'),
+  });
   const plate2 = createPlate2($('#plate2'));
   const tape = createTape($('.tape'));
   const imprint = createImprint($('.imprint'));
@@ -47,6 +53,8 @@ function boot() {
   let lastWord = '';
   let hadData = false;
   let queued = false;
+  /** @type {import('./ui/view.js').Said|null} what the live region last said */
+  let said = null;
 
   /** @param {MarketState} state */
   function render(state) {
@@ -72,7 +80,11 @@ function boot() {
       }
       lastWord = st.word;
     }
-    announcer.push(announcement(symbolView(state.symbols[main], serverNow)));
+    const s = state.symbols[main];
+    if (announceWorthy(said, s)) {
+      said = { symbol: s.symbol, last: s.last, high24h: s.high24h, low24h: s.low24h };
+      announcer.push(announcement(symbolView(s, serverNow)));
+    }
   }
 
   function schedule() {

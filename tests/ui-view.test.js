@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { announcement, directionOf, statusView, symbolView } from '../js/ui/view.js';
+import { announceWorthy, announcement, directionOf, statusView, symbolView } from '../js/ui/view.js';
 import { createAnnouncer } from '../js/ui/announce.js';
 import { fundingNote, massNote, ordinal, settlementHours } from '../js/ui/imprint.js';
 import { MINUS, PLACEHOLDER, THIN_SPACE } from '../js/format.js';
@@ -106,6 +106,8 @@ test('statusView: stale says how old the figures are and when it retries', () =>
     state({
       status: 'stale',
       lastMessageAt: NOW - 41_000,
+      dataAt: NOW - 41_000 + 5_000, // Binance clock, 5 s ahead of the local one
+      clockSkew: 5_000,
       error: { kind: 'stream', message: 'Live stream closed (1006)', source: 'stream', at: NOW, retryAt: NOW + 2_400 },
     }),
     NOW,
@@ -114,6 +116,19 @@ test('statusView: stale says how old the figures are and when it retries', () =>
   assert.equal(s.age, `last update 41${T}s ago`);
   assert.equal(s.retry, `retrying in 3${T}s`, 'rounded up');
   assert.match(s.headline ?? '', /stream/);
+});
+
+test('statusView: the REST fallback says DELAYED, how old the figures are, and why', () => {
+  const never = statusView(state({ status: 'polling', lastMessageAt: null, dataAt: NOW - 7_000 }), NOW);
+  assert.equal(never.word, 'DELAYED');
+  assert.equal(never.tone, 'stale');
+  assert.equal(never.age, `last update 7${T}s ago`);
+  assert.match(never.headline ?? '', /could not be opened; the figures are fetched every 12/);
+  const dropped = statusView(state({ status: 'polling', lastMessageAt: NOW - 60_000, dataAt: NOW - 3_000 }), NOW);
+  assert.match(dropped.headline ?? '', /has dropped/);
+  const stale = statusView(state({ status: 'stale', lastMessageAt: null, dataAt: NOW - 90_000 }), NOW);
+  assert.match(stale.headline ?? '', /could not be opened; these are the last figures/);
+  assert.equal(stale.age, `last update 1${T}min ago`);
 });
 
 test('statusView drops the stream message\u2019s frozen delay in favour of the live countdown', () => {
@@ -250,4 +265,17 @@ test('imprint: the mass note gives each percentile, or says it is not available'
   const s = state();
   s.symbols.CLUSDT = sym({ symbol: 'CLUSDT', rangePercentile30d: null });
   assert.match(massNote(s), /CL not available yet/);
+});
+
+test('announceWorthy: the first price, another instrument, a new extreme or a 0.25 % move', () => {
+  const s = (/** @type {object} */ o = {}) => ({ symbol: 'XAUUSDT', last: 4000, high24h: 4050, low24h: 3950, ...o });
+  assert.equal(announceWorthy(null, s()), true);
+  assert.equal(announceWorthy(null, s({ last: null })), false, 'nothing to say without a price');
+  assert.equal(announceWorthy(s(), s({ last: 4009 })), false, '0.22 %: not news');
+  assert.equal(announceWorthy(s(), s({ last: 4010 })), true, '0.25 %');
+  assert.equal(announceWorthy(s(), s({ last: 3990 })), true, 'down as well');
+  assert.equal(announceWorthy(s(), s({ symbol: 'CLUSDT', last: 71 })), true, 'the main instrument changed');
+  assert.equal(announceWorthy(s(), s({ last: 4051, high24h: 4051 })), true, 'a new 24 h high');
+  assert.equal(announceWorthy(s({ last: 4051, high24h: 4051 }), s({ last: 4051, high24h: 4051 })), false);
+  assert.equal(announceWorthy(s(), s({ last: 3949, low24h: 3949 })), true, 'a new 24 h low');
 });

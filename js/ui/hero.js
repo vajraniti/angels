@@ -3,9 +3,10 @@
 // percentile), the crisp Didone price cut by the right edge, the vertical script
 // word, the data cross (stem = 24 h low to high, a notch at the last price), and the
 // funding clock. Numbers sit on the perimeter. The second instrument is a small block
-// with a pointer to Plate II; the switch swaps the two roles.
+// with a pointer to Plate II; the switch swaps the two roles. The sharp layer is set
+// twice, in ink and in paper; js/ui/mass.js masks the two copies to the mass.
 
-import { $, fill, fillGrouped, setDirection, setText } from './dom.js';
+import { $, $$, fill, fillGrouped, setDirection, setText } from './dom.js';
 import { createMass, measureGlyphs } from './mass.js';
 import { fundingDial, jitteredArc, polar } from './clock.js';
 import { heroColumn } from './kanji.js';
@@ -27,10 +28,18 @@ const TRACKING = Object.freeze({ XAUUSDT: 0, CLUSDT: 0.24 });
 /**
  * How far the price's top reaches up into the mass, as a share of its type size,
  * [desktop, mobile]. Oil's figures sit lower so the 7's bar lands in the solid foot
- * of the L rather than in the grain above it.
+ * of the L rather than in the grain above it; on a phone gold's sit a little lower
+ * too, so most of each digit stands below the mass's dithered foot.
  */
-const PRICE_REACH = Object.freeze({ XAUUSDT: [0.56, 0.5], CLUSDT: [0.3, 0.3] });
+const PRICE_REACH = Object.freeze({ XAUUSDT: [0.56, 0.42], CLUSDT: [0.3, 0.3] });
 const MOBILE_MAX = 760;
+/**
+ * A settlement tick closer than this to the dial's index (radians, about 25°) is set
+ * inside the ring: outside it, its hour label would print over the funding rate or the
+ * countdown, which sit just above the index.
+ */
+const NEAR_INDEX = 0.44;
+const MINUTE = 60_000;
 
 /** @typedef {import('../market.js').MarketState} MarketState */
 
@@ -61,6 +70,7 @@ export function createHero(root) {
   const mass = createMass({
     echoCanvas: /** @type {HTMLCanvasElement} */ ($('[data-mass-echo]', root)),
     inkCanvas: /** @type {HTMLCanvasElement} */ ($('[data-mass-ink]', root)),
+    inkLayer,
     paperLayer,
   });
 
@@ -75,6 +85,14 @@ export function createHero(root) {
   let lastMinchoKey = '';
   /** @type {Record<string, string>} markup last written per geo group */
   const geoMarkup = { cross: '', dial: '' };
+  /** --script-x from the mass's letters, before the cross's numbers push it right */
+  let scriptBaseX = 0;
+  let scriptX = '';
+  /** @type {Element[]} the dial's funding figure in both copies of the sharp layer */
+  let dialFunding = [];
+  /** @type {Element[]} the dial's countdown in both copies */
+  let dialCountdown = [];
+  let crossNums = '';
 
   function base(/** @type {string} */ sym) {
     return SYMBOL_INFO[/** @type {keyof typeof SYMBOL_INFO} */ (sym)]?.base ?? sym;
@@ -119,7 +137,7 @@ export function createHero(root) {
     const reach = (PRICE_REACH[/** @type {keyof typeof PRICE_REACH} */ (main)] ?? [0.5, 0.5])[mobile ? 1 : 0];
     root.style.setProperty('--price-top', `${Math.round(baseline - reach * priceFont)}px`);
     if (mobile) {
-      root.style.setProperty('--script-x', `${Math.round(0.035 * W)}px`);
+      scriptBaseX = Math.round(0.035 * W);
       root.style.setProperty('--script-y', `${Math.round(capTop - 0.2 * H)}px`);
     } else {
       // Desktop: the word crosses into the second letter where its ink is solid: the
@@ -127,9 +145,10 @@ export function createHero(root) {
       const first = (glyphs[text[0]] ??= measureGlyphs(text[0]));
       const nudge = short ? 0.03 : -0.035;
       const secondStart = x + (first.width + first.left + tracking) * size;
-      root.style.setProperty('--script-x', `${Math.round(secondStart + nudge * W)}px`);
+      scriptBaseX = Math.round(secondStart + nudge * W);
       root.style.setProperty('--script-y', '8%');
     }
+    setScriptX(scriptBaseX);
     // Mobile stacks open interest and the status notice under the price block.
     const box = $('[data-pricebox]', inkLayer).getBoundingClientRect();
     root.style.setProperty('--below-price', `${Math.round(box.bottom - r.top + 0.035 * H)}px`);
@@ -137,14 +156,23 @@ export function createHero(root) {
     // Geometry depends on the layout: rewrite it on the next update.
     geoMarkup.cross = '';
     geoMarkup.dial = '';
+    crossNums = '';
   }
 
   // ------------------------------------------------------------ geometry markup
 
+  /** @param {number} px */
+  function setScriptX(px) {
+    const v = `${Math.round(px)}px`;
+    if (v === scriptX) return;
+    scriptX = v;
+    root.style.setProperty('--script-x', v);
+  }
+
   /**
    * The data cross: a Latin cross whose stem spans the 24 h low (foot) to high
    * (head). The crossbar stays in the upper third whatever the price does (critique:
-   * no upside-down cross); the last price is a notch in the stem with pixel dust.
+   * no upside-down cross); the last price is a notch in the stem with a hairline.
    * @param {HeroLayout} L
    * @param {{ high: string, low: string, f: number|null }} d
    */
@@ -152,10 +180,12 @@ export function createHero(root) {
     const { x, y0, y1, w } = L.cross;
     const len = y1 - y0;
     const yBar = Math.round(y0 + 0.27 * len);
-    const arm = Math.round(len / 6);
     const half = w / 2;
-    // Numbers and the price tick sit right of the stem on desktop, left of it on
-    // mobile, where the stem stands near the right edge.
+    // On a narrow desktop the stem stands close to the left edge: the left arm stops
+    // 16 px short of it instead of being cut, and the right one matches it.
+    const arm = Math.max(half + 8, Math.min(Math.round(len / 6), x - 16));
+    // Numbers sit right of the stem on desktop, left of it on mobile, where the stem
+    // stands near the right edge.
     const side = L.mobile ? -1 : 1;
     const rect = (
       /** @type {number} */ x0,
@@ -170,9 +200,9 @@ export function createHero(root) {
     } else {
       const yl = Math.round(y1 - d.f * len);
       parts = rect(x - half, y0, x + half, yl - 2) + rect(x - half, yl + 2, x + half, y1);
-      // A short hairline off the notch, then dust thinning away from it (brief 4.6).
-      live = `<path class="stroke" stroke-width="1" d="M${x + side * (half + 3)} ${yl + 0.5}H${x + side * (half + 22)}"/>`;
-      live += dust(x, yl, half, 1498 + Math.round(yl));
+      // A hairline out of the notch on the side away from the HIGH/LOW labels, so a
+      // price at a 24 h extreme never strikes through them.
+      live = `<path class="stroke" stroke-width="1" d="M${x - side * (half + 3)} ${yl + 0.5}H${x - side * (half + 20)}"/>`;
     }
     parts += rect(x - arm, yBar - half, x - half, yBar + half) + rect(x + half, yBar - half, x + arm, yBar + half);
     const labelX = x + side * (half + 12);
@@ -192,37 +222,16 @@ export function createHero(root) {
   }
 
   /**
-   * Seeded 1 px dust around the notch, denser near it (FM stipple, brief 4.6).
-   * @param {number} x
-   * @param {number} y
-   * @param {number} half
-   * @param {number} seed
-   */
-  function dust(x, y, half, seed) {
-    let s = seed >>> 0 || 1;
-    const rnd = () => {
-      s ^= s << 13;
-      s ^= s >>> 17;
-      s ^= s << 5;
-      return (s >>> 0) / 4294967296;
-    };
-    let d = '';
-    for (let i = 0; i < 34; i++) {
-      const side = rnd() < 0.5 ? -1 : 1;
-      const dx = side * (half + 1 + Math.round(-Math.log(1 - rnd()) * 5));
-      const dy = Math.round((rnd() - 0.5) * 2 * -Math.log(1 - rnd()) * 6);
-      d += `M${x + dx} ${y + dy}h1v1h-1z`;
-    }
-    return `<path d="${d}"/>`;
-  }
-
-  /**
    * The funding clock: elapsed part of the funding interval as a doubled, trembling
    * hairline; settlement hours as ticks; one short red radial tick at now with the
    * funding rate and its red † right beside it, the countdown on the other side.
+   * The geometry is drawn from a time rounded to the minute (the arc moves a quarter
+   * of a degree a minute), and the two figures that change every second are text
+   * nodes updated in place (dialFigures), so the group is rebuilt once a minute
+   * rather than on every tick.
    * @param {HeroLayout} L
    * @param {ReturnType<typeof fundingDial>} dial
-   * @param {{ funding: string, every: string, countdown: string }} d
+   * @param {{ every: string }} d
    */
   function dialMarkup(L, dial, d) {
     const { cx, cy, r } = L.dial;
@@ -245,12 +254,14 @@ export function createHero(root) {
       for (const t of dial.ticks) {
         if (!t.next && !t.prev) continue;
         const len = t.next ? 13 : 8;
-        const a = polar(cx, cy, r + 4, t.angle);
-        const b = polar(cx, cy, r + 4 + len, t.angle);
+        // Near the index the tick and its hour go inside the ring, clear of the figures.
+        const dir = Math.abs(t.angle) < NEAR_INDEX ? -1 : 1;
+        const a = polar(cx, cy, r + dir * 4, t.angle);
+        const b = polar(cx, cy, r + dir * (4 + len), t.angle);
         out += `<path class="stroke" stroke-width="${t.next ? 1.1 : 0.8}" d="M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(
           1,
         )} ${b.y.toFixed(1)}"/>`;
-        const p = polar(cx, cy, r + 4 + len + 11, t.angle);
+        const p = polar(cx, cy, r + dir * (4 + len + 11), t.angle);
         out += `<text class="h" x="${p.x.toFixed(1)}" y="${(p.y + 4).toFixed(1)}" text-anchor="middle">${t.hour}${
           t.next ? '\u2009UTC' : ''
         }</text>`;
@@ -264,25 +275,55 @@ export function createHero(root) {
     const known = d.every !== PLACEHOLDER;
     const label = L.mobile || !known ? 'Funding' : `Funding, ${escapeXml(d.every)}`;
     out += `<text class="l" x="${top.x - 9}" y="${labelY}" text-anchor="end">${label}</text>`;
-    out += `<text class="n" x="${top.x - 8}" y="${valueY}" text-anchor="end">${escapeXml(d.funding)}${
+    out += `<text class="n" x="${top.x - 8}" y="${valueY}" text-anchor="end"><tspan data-dial="funding">${PLACEHOLDER}</tspan>${
       dial ? '<tspan class="red dag" dx="1">†</tspan>' : ''
     }</text>`;
     out += `<text class="l" x="${top.x + 9}" y="${labelY}">Next</text>`;
-    out += `<text class="n" x="${top.x + 9}" y="${valueY}">${escapeXml(d.countdown)}</text>`;
+    out += `<text class="n" x="${top.x + 9}" y="${valueY}" data-dial="countdown">${PLACEHOLDER}</text>`;
     return out;
+  }
+
+  /**
+   * The dial's two live figures, set in place in both copies of the sharp layer.
+   * @param {{ funding: string, countdown: string }} d
+   */
+  function dialFigures(d) {
+    for (const el of dialFunding) setText(el, d.funding);
+    for (const el of dialCountdown) setText(el, d.countdown);
   }
 
   /**
    * @param {'cross'|'dial'} group
    * @param {string} markup
+   * @returns {boolean} whether the markup changed
    */
   function writeGeo(group, markup) {
-    if (geoMarkup[group] === markup) return;
+    if (geoMarkup[group] === markup) return false;
     geoMarkup[group] = markup;
     for (const layer of layers) {
       const g = layer.querySelector(`[data-geo-${group}]`);
       if (g) g.innerHTML = markup;
     }
+    if (group === 'dial') {
+      dialFunding = layers.flatMap((l) => $$('[data-dial="funding"]', l));
+      dialCountdown = layers.flatMap((l) => $$('[data-dial="countdown"]', l));
+    }
+    return true;
+  }
+
+  /**
+   * Desktop: the vertical script word stands right of the cross's numbers. On a narrow
+   * window the place the mass gives it would put it on the HIGH figure.
+   */
+  function clearScriptOfCross() {
+    const L = /** @type {HeroLayout} */ (layout);
+    if (L.mobile) return;
+    let right = 0;
+    for (const t of inkLayer.querySelectorAll('[data-geo-cross] text.n')) {
+      const box = /** @type {SVGGraphicsElement} */ (t).getBBox();
+      right = Math.max(right, box.x + box.width);
+    }
+    setScriptX(Math.max(scriptBaseX, right + 10));
   }
 
   // ------------------------------------------------------------ updates
@@ -329,12 +370,19 @@ export function createHero(root) {
         ? Math.min(1, Math.max(0, (s.last - s.low24h) / (s.high24h - s.low24h)))
         : null;
     writeGeo('cross', crossMarkup(L, { high: v.high, low: v.low, f }));
+    // The numbers' width moves the script word, not the notch: measure only when they change.
+    const nums = `${v.high}|${v.low}|${L.W}x${L.H}`;
+    if (nums !== crossNums) {
+      crossNums = nums;
+      clearScriptOfCross();
+    }
     const dial = fundingDial({
-      now: serverNow,
+      now: Math.floor(serverNow / MINUTE) * MINUTE,
       nextFundingTime: s.nextFundingTime,
       intervalHours: s.fundingIntervalHours,
     });
-    writeGeo('dial', dialMarkup(L, dial, { funding: v.funding, every: v.fundingEvery, countdown: v.countdown }));
+    writeGeo('dial', dialMarkup(L, dial, { every: v.fundingEvery }));
+    dialFigures({ funding: v.funding, countdown: v.countdown });
 
     const column = heroColumn(main, v.countdownMs);
     const minchoKey = column.join('|');
@@ -380,8 +428,10 @@ export function createHero(root) {
     notice.hidden = !show;
     if (!show) return;
     setText($('[data-notice="headline"]', notice), st.headline ?? '');
-    const sentence = (/** @type {string|null} */ t) => (t ? `${t[0].toUpperCase()}${t.slice(1)}.` : null);
-    const detail = [sentence(st.age), st.detail, sentence(st.retry)].filter(Boolean).join(' ');
+    // Each part is its own sentence; the data layer's messages carry no full stop.
+    const sentence = (/** @type {string|null} */ t) =>
+      t ? `${t[0].toUpperCase()}${t.slice(1)}${/[.!?…]$/.test(t) ? '' : '.'}` : null;
+    const detail = [sentence(st.age), sentence(st.detail), sentence(st.retry)].filter(Boolean).join(' ');
     setText($('[data-notice="detail"]', notice), detail);
   }
 

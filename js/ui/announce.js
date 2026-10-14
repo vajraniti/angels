@@ -54,9 +54,5 @@ export function createAnnouncer({
       lastAt = now();
       write(text);
     },
-    dispose() {
-      if (timer !== null) clearTimer(timer);
-      timer = null;
-    },
   };
 }

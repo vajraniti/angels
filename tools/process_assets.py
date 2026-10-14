@@ -113,10 +113,27 @@ def fludd_darkness(width: int) -> Image.Image:
     """Robert Fludd, Utriusque Cosmi (1617), the Great Darkness: an etched black
     square with 'Et sic in infinitum' on four sides. It is a tone, not a line tint,
     so it keeps its greys; levels push the plate's paper to pure white so that
-    mix-blend-mode: multiply leaves the page's paper untouched."""
+    mix-blend-mode: multiply leaves the page's paper untouched.
+
+    The scan's margin paper is darker than the paper inside the plate mark (median
+    about 180 of 255 against the 168 white point), so outside the square a lower
+    white point takes it to white as well: only the engraved inscriptions stay, and
+    no grey rectangle shows where the image ends."""
     src = load_gray("19_fludd_great_darkness.jpg").crop((70, 58, 1862, 1862))
     img = resize(src, width)
-    v = levels(np.asarray(img), 24, 168, 1.05)
+    a = np.asarray(img)
+    v = levels(a, 24, 168, 1.05)
+    # The square: rows and columns that are mostly dark, padded so its ragged etched
+    # edge keeps the plate's own levels.
+    dark = a < 100
+    rows = np.where(dark.mean(axis=1) > 0.8)[0]
+    cols = np.where(dark.mean(axis=0) > 0.8)[0]
+    if rows.size == 0 or cols.size == 0:
+        raise SystemExit("process_assets: Fludd scan: the black square was not found")
+    pad = max(1, round(width / 200))
+    inside = np.zeros(a.shape, bool)
+    inside[max(0, rows.min() - pad) : rows.max() + pad + 1, max(0, cols.min() - pad) : cols.max() + pad + 1] = True
+    v = np.where(inside, v, levels(a, 24, 128, 1.05))
     gray = (INK + (255 - INK) * v).round().astype(np.uint8)
     # 24 grey levels are plenty for an etching and roughly halve the PNG.
     step = 255 / 23

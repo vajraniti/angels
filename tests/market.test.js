@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeStatus, createMarket } from '../js/market.js';
-import { OI_POLL_MS, SILENT_RECONNECT_MS, STALE_AFTER_MS, SUBSCRIBE_DEBOUNCE_MS } from '../js/config.js';
+import {
+  FALLBACK_EVERY_MS,
+  OI_POLL_MS,
+  POLL_FRESH_MS,
+  SILENT_RECONNECT_MS,
+  STALE_AFTER_MS,
+  SUBSCRIBE_DEBOUNCE_MS,
+} from '../js/config.js';
 import { ANCHOR, createSim } from './fixtures/market-sim.mjs';
 import { advance, later, makeFakeFetch, makeFakeWebSocket, settle } from './support/fakes.js';
 
@@ -52,22 +59,29 @@ function push(ws, kind, symbol, { interval = '15m', final = false, at = Date.now
   }
 }
 
-test('computeStatus: connecting, live, stale and error', () => {
+test('computeStatus: connecting, live, polling, stale and error', () => {
   const base = {
     hasData: true,
     fatal: false,
-    connected: true,
     lastMessageAt: 1000,
+    polledAt: null,
     startedAt: 0,
     now: 2000,
     staleAfterMs: 8000,
+    pollFreshMs: 34000,
   };
   assert.equal(computeStatus(base), 'live');
   assert.equal(computeStatus({ ...base, now: 9001 }), 'stale', 'silent longer than the threshold');
   assert.equal(computeStatus({ ...base, now: 9000 }), 'live', 'threshold is inclusive');
-  assert.equal(computeStatus({ ...base, connected: false }), 'stale', 'data but no socket');
   assert.equal(computeStatus({ ...base, lastMessageAt: null }), 'connecting', 'REST data, stream in its grace period');
   assert.equal(computeStatus({ ...base, lastMessageAt: null, now: 8001 }), 'stale', 'stream never came');
+  assert.equal(
+    computeStatus({ ...base, lastMessageAt: null, polledAt: 6000, now: 8001 }),
+    'polling',
+    'stream never came, the REST fallback keeps the figures current',
+  );
+  assert.equal(computeStatus({ ...base, polledAt: 6000, now: 40_001 }), 'stale', 'the fallback stopped answering too');
+  assert.equal(computeStatus({ ...base, polledAt: 6000, now: 40_000 }), 'polling', 'fresh is inclusive');
   assert.equal(computeStatus({ ...base, hasData: false }), 'connecting');
   assert.equal(computeStatus({ ...base, hasData: false, fatal: true }), 'error');
   assert.equal(computeStatus({ ...base, fatal: true }), 'live', 'a failed reload does not hide live data');
@@ -96,16 +110,19 @@ test('start() fills every field from REST, consistent with the fixtures', async 
   assert.equal(x.indexPrice, Number(pi.indexPrice));
   assert.equal(x.fundingRate, Number(pi.lastFundingRate));
   assert.equal(x.nextFundingTime, Date.UTC(2026, 9, 14, 0, 0, 0));
-  assert.equal(x.fundingIntervalHours, 8, 'listed in fundingInfo');
+  assert.equal(x.fundingIntervalHours, 4, 'listed in fundingInfo');
   assert.equal(x.openInterest, 41220.118);
   assert.equal(x.openInterestValue, 41220.118 * Number(pi.markPrice), 'OI value uses the mark price');
   assert.equal(x.priceDecimals, 2);
   assert.equal(x.qtyDecimals, 3);
   assert.equal(x.updatedAt, ANCHOR);
+  assert.equal(s.dataAt, ANCHOR, 'Binance time of the newest price applied');
 
   const c = s.symbols.CLUSDT;
   assert.equal(c.last, 71.08);
-  assert.equal(c.fundingIntervalHours, 8, 'absent from fundingInfo: Binance default');
+  assert.equal(sim.ticker24hr('CLUSDT', ANCHOR).lastPrice, '71.08000', 'fapi pads CL to 5 places');
+  assert.equal(c.priceDecimals, 2, 'the 0.01 tick from exchangeInfo, not the padding of the strings');
+  assert.equal(c.fundingIntervalHours, 4);
   assert.equal(c.qtyDecimals, 2);
   assert.ok(c.fundingRate !== null && c.fundingRate < 0);
 
@@ -149,8 +166,15 @@ test('stream events make the market live, then silence makes it stale and forces
   assert.equal(market.getState().status, 'live');
   assert.equal(market.getState().lastMessageAt, ANCHOR + 1000);
 
-  t.mock.timers.tick(STALE_AFTER_MS + 1000);
-  assert.equal(market.getState().status, 'stale');
+  // Silence: the REST fallback takes over (figures fetched every few seconds), so the
+  // page says DELAYED instead of freezing on the last streamed figures.
+  const tickerCalls = () => fetch.calls.filter((u) => u.includes('ticker/24hr')).length;
+  const tickersBefore = tickerCalls();
+  await advance(t, STALE_AFTER_MS + 1000, { step: 1000 });
+  assert.equal(market.getState().status, 'polling', 'the bootstrap figures are recent enough');
+  await advance(t, FALLBACK_EVERY_MS - STALE_AFTER_MS, { step: 1000 });
+  assert.equal(tickerCalls(), tickersBefore + 2, 'one fallback round, both symbols');
+  assert.equal(market.getState().status, 'polling');
 
   const klineCalls = () => fetch.calls.filter((u) => u.includes('/fapi/v1/klines') && u.includes('15m')).length;
   const before = klineCalls();
@@ -161,11 +185,78 @@ test('stream events make the market live, then silence makes it stale and forces
   assert.equal(WS.instances.length, 2);
   WS.last().serverOpen();
   await settle(20);
-  assert.equal(klineCalls(), before + 1, 'reconnect resynchronises the chart from REST');
+  assert.ok(klineCalls() > before, 'reconnect resynchronises the chart from REST');
   push(WS.last(), 'markPrice', 'XAUUSDT');
   await settle(1);
   assert.equal(market.getState().status, 'live');
   assert.equal(market.getState().error, null, 'a delivered message clears the stream error');
+});
+
+test('stream blocked but REST working: prices keep refreshing, with an honest age', async (t) => {
+  const { market, WS, fetch } = setup(t);
+  market.start();
+  await settle(20);
+  // Every socket is refused (a proxy that blocks WebSockets but allows HTTPS).
+  const refuse = () => {
+    const ws = WS.last();
+    if (ws.readyState !== 3) ws.serverClose(1006);
+  };
+  refuse();
+  await advance(t, 30 * 60_000, { step: 1000, each: refuse });
+  const s = market.getState();
+  assert.equal(s.status, 'polling');
+  assert.equal(s.lastMessageAt, null, 'the stream never delivered');
+  assert.equal(s.symbols.XAUUSDT.last, sim.lastPrice('XAUUSDT', /** @type {number} */ (s.dataAt)));
+  assert.ok(Date.now() - /** @type {number} */ (s.dataAt) <= FALLBACK_EVERY_MS + 1000, 'figures are seconds old');
+  const rounds = fetch.calls.filter((u) => u.includes('ticker/24hr')).length / 2;
+  const expected = (30 * 60_000) / FALLBACK_EVERY_MS;
+  assert.ok(rounds >= expected - 2 && rounds <= expected + 2, `${rounds} rounds in 30 min`);
+});
+
+test('stream and REST both down: stale, with the age of the last figures applied', async (t) => {
+  let down = false;
+  const handler = (/** @type {string} */ url) => {
+    if (down && !url.startsWith(PROBE)) throw new TypeError('Failed to fetch');
+    return simHandler(url);
+  };
+  const { market, WS } = setup(t, { handler });
+  market.start();
+  await settle(20);
+  WS.last().serverOpen();
+  t.mock.timers.tick(1000);
+  push(WS.last(), 'markPrice', 'XAUUSDT');
+  const at = Date.now();
+  down = true;
+  WS.last().serverClose(1006);
+  await advance(t, POLL_FRESH_MS + 5000, { step: 1000 });
+  const s = market.getState();
+  assert.equal(s.status, 'stale');
+  assert.equal(s.dataAt, at, 'the mark price pushed before the outage is the newest figure');
+});
+
+test('a reconnect does not flash stale while the data is seconds old', async (t) => {
+  const { market, WS } = setup(t);
+  market.start();
+  await settle(20);
+  WS.last().serverOpen();
+  push(WS.last(), 'markPrice', 'XAUUSDT');
+  /** @type {string[]} */
+  const seen = [];
+  market.subscribe((st) => seen.push(st.status));
+  // The same path as the planned 24 h recycle: the socket goes, a new one opens
+  // within a second or two. Status follows the age of the data, not the socket.
+  WS.last().serverClose(1006);
+  await advance(t, 3000, {
+    each: () => {
+      const ws = WS.last();
+      if (ws.readyState === 0) ws.serverOpen();
+      if (ws.readyState === 1) push(ws, 'markPrice', 'XAUUSDT');
+    },
+  });
+  assert.equal(WS.instances.length, 2, 'reconnected');
+  assert.ok(seen.length > 1);
+  assert.ok(!seen.includes('stale'), `statuses seen: ${[...new Set(seen)].join(', ')}`);
+  assert.equal(market.getState().status, 'live');
 });
 
 test('ticker, mark and kline events update the symbol; older events never roll values back', async (t) => {
@@ -331,8 +422,9 @@ test('a gap in the kline stream triggers a REST resync', async (t) => {
   WS.last().serverOpen();
   const calls = () => fetch.calls.filter((u) => u.includes('interval=15m')).length;
   const before = calls();
-  // 45 minutes in which the chart stream says nothing while the socket stays healthy.
-  await advance(t, 3 * MIN15, { step: 5000, each: () => push(WS.last(), 'markPrice', 'XAUUSDT') });
+  // 45 minutes in which the chart stream says nothing while the socket stays healthy
+  // (mark prices keep coming, so the REST fallback never starts).
+  await advance(t, 3 * MIN15, { step: 2500, each: () => push(WS.last(), 'markPrice', 'XAUUSDT') });
   assert.equal(WS.instances.length, 1, 'no reconnect happened, so only the gap can trigger the resync');
   push(WS.last(), 'kline', 'XAUUSDT');
   await settle(20);
@@ -450,7 +542,69 @@ test('a failing auxiliary source is retried on its own and shows as the active e
   await settle(20);
   s = market.getState();
   assert.equal(s.error, null);
-  assert.equal(s.symbols.XAUUSDT.fundingIntervalHours, 8);
+  assert.equal(s.symbols.XAUUSDT.fundingIntervalHours, 4);
+});
+
+test('exchangeInfo sets the decimals outright; until then the padded strings are read without their zeros', async (t) => {
+  let infoUp = false;
+  const handler = (/** @type {string} */ url) =>
+    !infoUp && url.includes('exchangeInfo') ? { status: 503, body: { code: -1001, msg: 'Busy.' } } : simHandler(url);
+  const { market } = setup(t, { handler });
+  market.start();
+  await settle(20);
+  let s = market.getState();
+  assert.equal(s.error?.source, 'exchangeInfo');
+  assert.equal(s.symbols.CLUSDT.priceDecimals, 2, '"71.08000" read as 2 decimals, not 5');
+  infoUp = true;
+  t.mock.timers.tick(/** @type {number} */ (s.error?.retryAt) - Date.now());
+  await settle(20);
+  s = market.getState();
+  assert.equal(s.error, null);
+  assert.equal(s.symbols.CLUSDT.priceDecimals, 2);
+  assert.equal(s.symbols.XAUUSDT.priceDecimals, 2);
+});
+
+test('stop() then start() in the same tick still runs every REST task for the new session', async (t) => {
+  const fetchImpl = makeFakeFetch(async (url) => {
+    await later(500);
+    return simHandler(url);
+  });
+  const { market, fetch } = setup(t, { fetchImpl });
+  market.start();
+  await settle(5);
+  market.stop();
+  market.start();
+  await advance(t, 3000);
+  const s = market.getState();
+  assert.equal(s.symbols.XAUUSDT.last, sim.lastPrice('XAUUSDT', /** @type {number} */ (s.dataAt)));
+  assert.equal(s.symbols.XAUUSDT.fundingIntervalHours, 4);
+  assert.ok(fetch.calls.filter((u) => u.includes('fundingInfo')).length >= 2);
+});
+
+test('a rejected SUBSCRIBE is retried and its error stays until that stream delivers', async (t) => {
+  const { market, WS } = setup(t);
+  market.start();
+  await settle(20);
+  const ws = WS.last();
+  ws.serverOpen();
+  market.setChart({ interval: '1h' });
+  t.mock.timers.tick(SUBSCRIBE_DEBOUNCE_MS);
+  const sub = /** @type {any[]} */ (ws.sent).find((m) => m.method === 'SUBSCRIBE');
+  assert.deepEqual(sub.params, ['xauusdt@kline_1h']);
+  ws.serverSend({ error: { code: 2, msg: 'Invalid request' }, id: sub.id });
+  push(ws, 'markPrice', 'XAUUSDT');
+  let s = market.getState();
+  assert.equal(s.status, 'live');
+  assert.equal(s.error?.source, 'stream', 'mark prices flowing do not hide the rejected chart stream');
+  t.mock.timers.tick(/** @type {number} */ (s.error?.retryAt) - Date.now());
+  const subs = /** @type {any[]} */ (ws.sent).filter((m) => m.method === 'SUBSCRIBE');
+  assert.equal(subs.length, 2, 'asked again after a backoff');
+  assert.deepEqual(subs[1].params, ['xauusdt@kline_1h']);
+  ws.serverSend({ result: null, id: subs[1].id });
+  push(ws, 'kline', 'XAUUSDT', { interval: '1h' });
+  push(ws, 'markPrice', 'XAUUSDT');
+  s = market.getState();
+  assert.equal(s.error, null);
 });
 
 test('setChart validates input and ignores a no-op switch', async (t) => {

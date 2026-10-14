@@ -1,14 +1,17 @@
 // Paints the dissolve mass (js/ui/dissolve.js) into the hero and keeps the sharp
-// layer's inversion exact. Three surfaces, bottom to top:
+// layer's inversion exact. Four surfaces, bottom to top:
 //   echo canvas   grey echo dots (and the pale latent impression before data);
-//   ink layer     the sharp type, ink on paper (DOM, sits between the canvases);
 //   ink canvas    the black dots;
-//   paper layer   the same sharp type in paper colour, masked to the black dots.
-// So a glyph is solid ink over paper and over grey echo dots, and exactly paper over
-// black dots: the inversion is computed against the mass only (critique: no
-// halftone or echo dots leak into the sharp layer).
+//   ink layer     the sharp type in ink, each glyph with a thin paper halo that
+//                 clears the grain around it (DOM, masked to where the mass is thin);
+//   paper layer   the same sharp type in paper colour, masked to where it is dense.
+// The two masks are one region and its complement: the contour where the mass's ink
+// density reaches SOLID_AT. Inside it a glyph is solid paper on near-solid black;
+// outside it, solid ink kept clear of the grain by its halo. No dot of grain or echo
+// ever lands inside a glyph (critique: no halftone leaks into the sharp layer), and a
+// glyph in the transition band keeps one clean edge instead of dissolving into it.
 
-import { ECHO, INK, massKey, massParams, renderDissolve } from './dissolve.js';
+import { massKey, massParams, moveOf, renderLayers } from './dissolve.js';
 import { BAYER4 } from './chart-scale.js';
 import { reducedMotion } from './dom.js';
 
@@ -72,8 +75,10 @@ function fillTracked(ctx, text, x, y, trackingPx) {
   }
 }
 
+/** @typedef {ReturnType<typeof renderLayers>} Layers */
+
 /**
- * renderDissolve in a module worker when the browser offers one, on the main thread
+ * renderLayers in a module worker when the browser offers one, on the main thread
  * otherwise (same code, same result; only the stall differs).
  */
 function createRenderer() {
@@ -85,7 +90,7 @@ function createRenderer() {
     console.warn('The dissolve runs on the main thread: no module worker', err);
   }
   let nextId = 1;
-  /** @type {Map<number, { resolve: (out: Uint8Array) => void, reject: (err: Error) => void }>} */
+  /** @type {Map<number, { resolve: (out: Layers) => void, reject: (err: Error) => void }>} */
   const pending = new Map();
   worker?.addEventListener('message', (event) => {
     const { id, out, error } = event.data;
@@ -105,11 +110,11 @@ function createRenderer() {
     pending.clear();
   });
   /**
-   * @param {Parameters<typeof renderDissolve>[0]} args
-   * @returns {Promise<Uint8Array>}
+   * @param {Parameters<typeof renderLayers>[0]} args
+   * @returns {Promise<Layers>}
    */
   return function render(args) {
-    if (!worker) return Promise.resolve(renderDissolve(args));
+    if (!worker) return Promise.resolve(renderLayers(args));
     const id = nextId++;
     const w = worker;
     return new Promise((resolve, reject) => {
@@ -139,24 +144,6 @@ function context(c) {
 }
 
 /**
- * A 4×4 ordered-dither tile that is opaque where the Bayer threshold is under
- * `level`, as a repeating pattern factory for a given context.
- * @param {number} level 0..1
- */
-function bayerPattern(level) {
-  const tile = blankCanvas(4, 4);
-  const tctx = context(tile);
-  const img = tctx.createImageData(4, 4);
-  for (let i = 0; i < 16; i++) if ((BAYER4[i] + 0.5) / 16 < level) img.data[i * 4 + 3] = 255;
-  tctx.putImageData(img, 0, 0);
-  return (/** @type {CanvasRenderingContext2D} */ ctx) => {
-    const p = ctx.createPattern(tile, 'repeat');
-    if (!p) throw new Error('Painting the mass: the canvas refused a Bayer pattern');
-    return p;
-  };
-}
-
-/**
  * Wait until the browser has painted, so a long computation does not delay the
  * frame that shows the result of the previous one.
  */
@@ -167,15 +154,47 @@ function nextFrame() {
 }
 
 /**
- * @param {{ echoCanvas: HTMLCanvasElement, inkCanvas: HTMLCanvasElement, paperLayer: HTMLElement }} p
+ * Encode a canvas as a PNG object URL and decode it, so a mask that uses it appears in
+ * the same frame as whatever is shown with it.
+ * @param {HTMLCanvasElement} c
+ * @returns {Promise<string>}
  */
-export function createMass({ echoCanvas, inkCanvas, paperLayer }) {
+async function maskUrl(c) {
+  /** @type {Blob|null} */
+  const blob = await new Promise((resolve) => {
+    c.toBlob(resolve, 'image/png');
+  });
+  if (!blob) throw new Error('Building the inversion mask: the canvas could not be encoded as PNG');
+  const url = URL.createObjectURL(blob);
+  const probe = new Image();
+  probe.src = url;
+  try {
+    await probe.decode();
+  } catch (err) {
+    URL.revokeObjectURL(url);
+    throw new Error('Building the inversion mask: the PNG could not be decoded', { cause: err });
+  }
+  return url;
+}
+
+/**
+ * @param {{ echoCanvas: HTMLCanvasElement, inkCanvas: HTMLCanvasElement, inkLayer: HTMLElement, paperLayer: HTMLElement }} p
+ */
+export function createMass({ echoCanvas, inkCanvas, inkLayer, paperLayer }) {
   let shownKey = '';
   let job = 0;
   let shownW = 0;
   let shownH = 0;
-  /** @type {string|null} */
-  let maskUrl = null;
+  /** @type {import('./dissolve.js').Move|null} the move the mass shows, with hysteresis */
+  let move = null;
+  let moveText = '';
+  /** @type {{ paper: string, ink: string }|null} object URLs of the masks in use */
+  let masks = null;
+  /**
+   * What the two canvases show, as RGBA: the start of the next reveal.
+   * @type {{ ink: Uint8ClampedArray, echo: Uint8ClampedArray, w: number, h: number }|null}
+   */
+  let frame = null;
   const renderer = createRenderer();
 
   /**
@@ -187,6 +206,12 @@ export function createMass({ echoCanvas, inkCanvas, paperLayer }) {
    * @returns {Promise<void>}
    */
   async function render(spec) {
+    if (spec.text !== moveText) {
+      // Another instrument: its move starts fresh, not from gold's hysteresis.
+      moveText = spec.text;
+      move = null;
+    }
+    move = moveOf(move, spec.changePct);
     const w = Math.max(1, Math.round(spec.width));
     const h = Math.max(1, Math.round(spec.height));
     const key = [
@@ -197,18 +222,19 @@ export function createMass({ echoCanvas, inkCanvas, paperLayer }) {
       Math.round(spec.size),
       Math.round(spec.x),
       Math.round(spec.baseline),
-      massKey(spec),
+      massKey({ percentile: spec.percentile, move }),
     ].join('|');
     if (key === shownKey) return;
     shownKey = key;
     const mine = ++job;
+    const cancelled = () => mine !== job;
 
     const alpha = glyphAlpha(spec, w, h);
     await nextFrame();
-    if (mine !== job) return;
+    if (cancelled()) return;
 
-    const params = massParams(spec);
-    /** @type {Uint8Array} */
+    const params = massParams({ percentile: spec.percentile, move, size: spec.size, massWidth: spec.massWidth });
+    /** @type {Layers} */
     let out;
     try {
       out = await renderer({
@@ -221,13 +247,15 @@ export function createMass({ echoCanvas, inkCanvas, paperLayer }) {
         echo: params.echo,
         seed: spec.seed,
         density: params.latent ? 0.42 : 1,
+        latent: params.latent,
+        colors: { echo: ECHO_RGB, latent: LATENT_RGB },
       });
     } catch (err) {
       // Let the next update try again (on the main thread if the worker died).
       if (mine === job) shownKey = '';
       throw err;
     }
-    if (mine !== job) return;
+    if (cancelled()) return;
 
     const sameSize = shownW === w && shownH === h;
     if (!sameSize) {
@@ -235,15 +263,32 @@ export function createMass({ echoCanvas, inkCanvas, paperLayer }) {
         c.width = w;
         c.height = h;
       }
+      // Masks of another size would put the inversion in the wrong place.
+      setMasks(null);
     }
-    // The mask goes out of date the moment the dots change; drop it first so the
-    // paper layer never shows paper type where there is no longer any mass.
-    clearMask();
-    await reveal(out, params.latent, w, h, () => mine !== job);
-    if (mine !== job) return;
+    // The new masks are encoded while the reveal runs; the old ones stay applied until
+    // then, so the price never goes ink on ink while the picture changes.
+    const next = out.solid ? buildMasks(out.solid, w, h) : Promise.resolve(null);
+    try {
+      await reveal(out, w, h, cancelled);
+    } catch (err) {
+      next.then(revoke, (maskErr) => console.error('Building the inversion masks failed', maskErr));
+      throw err;
+    }
+    if (cancelled()) {
+      // A newer render has taken over and builds its own masks; this pair is unused,
+      // and a failure to build it would recur, and be reported, in that render.
+      next.then(revoke, () => {});
+      return;
+    }
     shownW = w;
     shownH = h;
-    if (!params.latent) await applyMask(out, w, h, () => mine !== job);
+    const m = await next;
+    if (cancelled()) {
+      revoke(m);
+      return;
+    }
+    setMasks(m);
   }
 
   /**
@@ -269,137 +314,116 @@ export function createMass({ echoCanvas, inkCanvas, paperLayer }) {
 
   /**
    * Bayer transition from the picture on screen to the new impression (brief 4.5):
-   * 16 screen levels over 600 ms, then the picture stands still. Each level is a
-   * pattern fill composited on the GPU, not a per-pixel loop, so a full-width mass
-   * costs a few draw calls per step. Instant when the reader prefers reduced motion.
-   * @param {Uint8Array} to
-   * @param {boolean} latent the new picture is the pale impression without data
+   * 16 screen levels over 600 ms, then the picture stands still. Each level switches
+   * one cell of the 4×4 Bayer matrix, a sixteenth of the pixels, from the old picture
+   * to the new one in an RGBA copy of what is shown, then puts it on the canvas. That
+   * is a strided copy and one putImageData a step, cheap even where canvas has no GPU
+   * (compositing full-size pattern fills cost about a second there). Instant when the
+   * reader prefers reduced motion.
+   * @param {Layers} to
    * @param {number} w
    * @param {number} h
    * @param {() => boolean} cancelled
    */
-  async function reveal(to, latent, w, h, cancelled) {
-    // `from` holds what is on screen now: the transition starts there.
-    const targets = [inkCanvas, echoCanvas].map((canvas) => {
-      const from = blankCanvas(w, h);
-      context(from).drawImage(canvas, 0, 0);
-      return { canvas, image: blankCanvas(w, h), from };
-    });
-    const [ink, echo] = targets;
-    const inkCtx = context(ink.image);
-    const echoCtx = context(echo.image);
-    const inkImg = inkCtx.createImageData(w, h);
-    const echoImg = echoCtx.createImageData(w, h);
-    for (let i = 0; i < to.length; i++) {
-      const code = to[i];
-      if (code === 0) continue;
-      const j = i * 4;
-      if (code === INK && !latent) {
-        inkImg.data[j + 3] = 255;
-      } else {
-        const rgb = code === ECHO ? ECHO_RGB : LATENT_RGB;
-        echoImg.data[j] = rgb[0];
-        echoImg.data[j + 1] = rgb[1];
-        echoImg.data[j + 2] = rgb[2];
-        echoImg.data[j + 3] = 255;
-      }
+  async function reveal(to, w, h, cancelled) {
+    if (!frame || frame.w !== w || frame.h !== h) {
+      frame = { ink: new Uint8ClampedArray(w * h * 4), echo: new Uint8ClampedArray(w * h * 4), w, h };
     }
-    inkCtx.putImageData(inkImg, 0, 0);
-    echoCtx.putImageData(echoImg, 0, 0);
-
-    const steps = reducedMotion() ? 1 : REVEAL_STEPS;
-    if (steps === 1) {
-      for (const t of targets) {
-        const ctx = context(t.canvas);
-        ctx.globalCompositeOperation = 'copy';
-        ctx.drawImage(t.image, 0, 0);
-        ctx.globalCompositeOperation = 'source-over';
-      }
+    const shown = frame;
+    const views = /** @type {const} */ ([
+      [inkCanvas, shown.ink, to.ink],
+      [echoCanvas, shown.echo, to.echo],
+    ]).map(([canvas, cur, next]) => ({
+      ctx: context(canvas),
+      // The ImageData wraps the shown buffer without copying it.
+      image: new ImageData(cur, w, h),
+      cur: new Uint32Array(cur.buffer),
+      next: new Uint32Array(next.buffer),
+    }));
+    const put = () => {
+      for (const v of views) v.ctx.putImageData(v.image, 0, 0);
+    };
+    if (reducedMotion()) {
+      for (const v of views) v.cur.set(v.next);
+      put();
       return;
     }
-    const scratch = blankCanvas(w, h);
-    const sctx = context(scratch);
     const t0 = performance.now();
-    for (let step = 1; step <= steps; step++) {
-      const pattern = bayerPattern(step / steps);
-      for (const t of targets) {
-        // scratch = new picture through the screen; screen = old picture outside it.
-        sctx.globalCompositeOperation = 'copy';
-        sctx.drawImage(t.image, 0, 0);
-        sctx.globalCompositeOperation = 'destination-in';
-        sctx.fillStyle = pattern(sctx);
-        sctx.fillRect(0, 0, w, h);
-        const ctx = context(t.canvas);
-        ctx.globalCompositeOperation = 'copy';
-        ctx.drawImage(t.from, 0, 0);
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.fillStyle = pattern(ctx);
-        ctx.fillRect(0, 0, w, h);
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.drawImage(scratch, 0, 0);
+    for (let step = 0; step < REVEAL_STEPS; step++) {
+      const cell = BAYER4.indexOf(step);
+      const cx = cell & 3;
+      const cy = cell >> 2;
+      for (const v of views) {
+        for (let y = cy; y < h; y += 4) {
+          const row = y * w;
+          for (let x = cx; x < w; x += 4) v.cur[row + x] = v.next[row + x];
+        }
       }
-      if (step < steps) {
-        const due = t0 + (REVEAL_MS * step) / steps;
+      put();
+      if (step < REVEAL_STEPS - 1) {
+        const due = t0 + (REVEAL_MS * (step + 1)) / REVEAL_STEPS;
         await new Promise((resolve) => {
           setTimeout(resolve, Math.max(0, due - performance.now()));
         });
+        // A newer render continues from the mix on screen, which `frame` still holds.
         if (cancelled()) return;
       }
     }
   }
 
-  function clearMask() {
-    paperLayer.classList.remove('is-masked');
-    paperLayer.style.removeProperty('mask-image');
-    paperLayer.style.removeProperty('-webkit-mask-image');
-    if (maskUrl) URL.revokeObjectURL(maskUrl);
-    maskUrl = null;
+  /**
+   * The paper layer's mask (the solid region) and the ink layer's (its complement),
+   * one mask pixel per CSS pixel, scaled by the layers with mask-size: 100% 100%.
+   * @param {Uint8ClampedArray} solid RGBA, opaque inside the region
+   * @param {number} w
+   * @param {number} h
+   */
+  async function buildMasks(solid, w, h) {
+    const region = blankCanvas(w, h);
+    context(region).putImageData(new ImageData(solid, w, h), 0, 0);
+    const rest = blankCanvas(w, h);
+    const rctx = context(rest);
+    rctx.fillStyle = '#000';
+    rctx.fillRect(0, 0, w, h);
+    rctx.globalCompositeOperation = 'destination-out';
+    rctx.drawImage(region, 0, 0);
+    const [paper, ink] = await Promise.allSettled([maskUrl(region), maskUrl(rest)]);
+    if (paper.status === 'rejected' || ink.status === 'rejected') {
+      for (const r of [paper, ink]) if (r.status === 'fulfilled') URL.revokeObjectURL(r.value);
+      throw paper.status === 'rejected' ? paper.reason : /** @type {PromiseRejectedResult} */ (ink).reason;
+    }
+    return { paper: paper.value, ink: ink.value };
+  }
+
+  /** @param {{ paper: string, ink: string }|null} m */
+  function revoke(m) {
+    if (!m) return;
+    URL.revokeObjectURL(m.paper);
+    URL.revokeObjectURL(m.ink);
   }
 
   /**
-   * Mask image of the black dots, one mask pixel per dot. The paper layer scales it
-   * with image-rendering: pixelated, so each dot's edge lands on the same device
-   * pixels as the dot on the canvas.
-   * @param {Uint8Array} out
-   * @param {number} w
-   * @param {number} h
-   * @param {() => boolean} cancelled
+   * Apply a pair of masks, or none: without masks the ink layer shows whole (its
+   * halos keep it legible over the grain) and the paper layer is hidden.
+   * @param {{ paper: string, ink: string }|null} m
    */
-  async function applyMask(out, w, h, cancelled) {
-    const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
-    const ctx = c.getContext('2d');
-    if (!ctx) throw new Error('Building the inversion mask: this browser gives no 2D canvas');
-    const img = ctx.createImageData(w, h);
-    for (let i = 0; i < out.length; i++) if (out[i] === INK) img.data[i * 4 + 3] = 255;
-    ctx.putImageData(img, 0, 0);
-
-    /** @type {Blob|null} */
-    const blob = await new Promise((resolve) => {
-      c.toBlob(resolve, 'image/png');
-    });
-    if (!blob) throw new Error('Building the inversion mask: the canvas could not be encoded as PNG');
-    if (cancelled()) return;
-    const url = URL.createObjectURL(blob);
-    // Decode before use, so the mask and the dots appear in the same frame.
-    const probe = new Image();
-    probe.src = url;
-    try {
-      await probe.decode();
-    } catch (err) {
-      URL.revokeObjectURL(url);
-      throw new Error('Building the inversion mask: the PNG could not be decoded', { cause: err });
+  function setMasks(m) {
+    const old = masks;
+    masks = m;
+    for (const [layer, url] of /** @type {const} */ ([
+      [paperLayer, m?.paper],
+      [inkLayer, m?.ink],
+    ])) {
+      if (url) {
+        layer.style.setProperty('-webkit-mask-image', `url("${url}")`);
+        layer.style.setProperty('mask-image', `url("${url}")`);
+      } else {
+        layer.style.removeProperty('-webkit-mask-image');
+        layer.style.removeProperty('mask-image');
+      }
     }
-    if (cancelled()) {
-      URL.revokeObjectURL(url);
-      return;
-    }
-    clearMask();
-    maskUrl = url;
-    paperLayer.style.setProperty('-webkit-mask-image', `url("${url}")`);
-    paperLayer.style.setProperty('mask-image', `url("${url}")`);
-    paperLayer.classList.add('is-masked');
+    paperLayer.classList.toggle('is-masked', m !== null);
+    revoke(old);
   }
 
   return {

@@ -81,7 +81,8 @@ export function createImprint(root) {
   return {
     /** @param {MarketState} state */
     update(state) {
-      const t = state.lastMessageAt === null ? null : state.lastMessageAt + (state.clockSkew ?? 0);
+      // Binance's own time of the newest figure applied, whether it came by stream or REST.
+      const t = state.dataAt;
       setText(asof, t === null ? '' : `Last figures ${formatUtcDate(t)}, ${formatUtcClock(t)} UTC.`);
       setText(funding, fundingNote(state));
       setText(mass, massNote(state));

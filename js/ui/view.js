@@ -13,7 +13,7 @@ import {
   formatPrice,
   formatSigned,
 } from '../format.js';
-import { SYMBOL_INFO } from '../config.js';
+import { FALLBACK_EVERY_MS, SYMBOL_INFO } from '../config.js';
 
 /** @typedef {import('../market.js').SymbolState} SymbolState */
 /** @typedef {import('../market.js').MarketState} MarketState */
@@ -86,9 +86,9 @@ export function directionOf(change) {
 
 /**
  * @typedef {Object} StatusView
- * @property {'LIVE'|'STALE'|'CONNECTING'|'OFFLINE'|'BLOCKED'} word
+ * @property {'LIVE'|'DELAYED'|'STALE'|'CONNECTING'|'OFFLINE'|'BLOCKED'} word
  * @property {'live'|'stale'|'connecting'|'error'} tone
- * @property {string|null} age       "last update 41 s ago" while stale
+ * @property {string|null} age       "last update 41 s ago" while polled or stale
  * @property {string|null} headline  one plain sentence when something is wrong
  * @property {string|null} detail    the data layer's own message (what was being done)
  * @property {string|null} retry     "retrying in 12 s" when a retry is scheduled
@@ -111,19 +111,31 @@ export function statusView(state, localNow) {
     e && typeof e.retryAt === 'number'
       ? `retrying in ${formatAge(Math.ceil(Math.max(1000, e.retryAt - localNow) / 1000) * 1000)}`
       : null;
+  // Measured from the newest figure actually applied (stream or REST), on Binance's
+  // clock, so it is right even when the stream never delivered at all.
   const age =
-    state.status === 'stale' && state.lastMessageAt !== null
-      ? `last update ${formatAge(localNow - state.lastMessageAt)} ago`
+    (state.status === 'stale' || state.status === 'polling') && state.dataAt !== null
+      ? `last update ${formatAge(localNow + (state.clockSkew ?? 0) - state.dataAt)} ago`
       : null;
+  const neverStreamed = state.lastMessageAt === null;
 
   if (state.status === 'live') {
     // A side problem (open interest poll failed) while prices stream: say it quietly.
     return { word: 'LIVE', tone: 'live', age: null, headline: null, detail: e ? e.message : null, retry };
   }
+  if (state.status === 'polling') {
+    const every = `${Math.round(FALLBACK_EVERY_MS / 1000)}\u2009s`;
+    const headline = neverStreamed
+      ? `The live stream from Binance could not be opened; the figures are fetched every ${every} instead.`
+      : `The live stream from Binance has dropped; the figures are fetched every ${every} until it is back.`;
+    return { word: 'DELAYED', tone: 'stale', age, headline, detail: e ? e.message : null, retry };
+  }
   if (state.status === 'stale') {
     const headline =
       e?.source === 'stream' || e === null
-        ? 'The live stream from Binance has stopped; these are the last figures received.'
+        ? neverStreamed
+          ? 'The live stream from Binance could not be opened; these are the last figures received.'
+          : 'The live stream from Binance has stopped; these are the last figures received.'
         : 'Binance stopped answering; these are the last figures received.';
     return { word: 'STALE', tone: 'stale', age, headline, detail: e ? e.message : null, retry };
   }
@@ -175,4 +187,26 @@ export function statusView(state, localNow) {
 export function announcement(v) {
   if (!v.known) return '';
   return `${v.symbol} ${v.last.replace(/\u2009/g, '')}, ${v.changePct} in 24 hours`;
+}
+
+/** A move this large (percent) since the last announcement is worth saying again. */
+export const ANNOUNCE_MOVE_PCT = 0.25;
+
+/**
+ * @typedef {{ symbol: string, last: number|null, high24h: number|null, low24h: number|null }} Said
+ */
+
+/**
+ * Whether the price is news to a screen-reader user: the first price, another
+ * instrument, a new 24 h high or low, or a move of ANNOUNCE_MOVE_PCT since it was
+ * last said. Anything else would interrupt the reader every few seconds all day.
+ * @param {Said|null} said what was announced last, null if nothing yet
+ * @param {Said} s the main instrument now
+ */
+export function announceWorthy(said, s) {
+  if (s.last === null) return false;
+  if (!said || said.symbol !== s.symbol || said.last === null) return true;
+  if (s.high24h !== null && s.last >= s.high24h && (said.high24h === null || s.high24h > said.high24h)) return true;
+  if (s.low24h !== null && s.last <= s.low24h && (said.low24h === null || s.low24h < said.low24h)) return true;
+  return said.last !== 0 && (Math.abs(s.last - said.last) / Math.abs(said.last)) * 100 >= ANNOUNCE_MOVE_PCT;
 }

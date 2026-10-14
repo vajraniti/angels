@@ -1,7 +1,7 @@
 // Pure layout arithmetic of Plate I: which candles fit, the price scale, the grid
 // values, time labels, and pointer-to-candle mapping. The canvas code only paints.
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+import { MONTHS } from '../format.js';
 
 /**
  * A round grid step (1, 2, 2.5, 5 × 10^k) giving about `count` lines over `range`.

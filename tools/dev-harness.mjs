@@ -6,9 +6,15 @@
 // The browser clock starts at the fixture time, so screenshots are reproducible.
 // Nothing here ships: the live site talks to Binance only.
 //
-//   node tools/dev-harness.mjs --shot <outdir> [--scenario live|stale|region|loading|offline|swap|all]
+//   node tools/dev-harness.mjs --shot <outdir> [--scenario live|stale|region|loading|offline|swap|nows|all]
 //                              [--width 1440 --height 900] [--dpr 1] [--full] [--reduced-motion]
-//                              [--page index.html]
+//                              [--page index.html] [--at 2026-10-13T20:30:00Z]
+//
+// --at starts the clock at another moment of the simulated data (default: the fixture
+// time, 20:44:56 UTC). Both instruments settle funding every 4 h, so 20:30 is half an
+// hour after a settlement, where the dial's previous-settlement tick sits by its index.
+// Scenario "nows": every WebSocket is refused while REST answers (a proxy that blocks
+// WebSockets), so the page must fall back to polling.
 //
 // Writes <outdir>/<scenario>-<n>-<label>.png, a matching .state.json (when the page
 // exposes window.__angelsMarket) and <outdir>/console.json; prints a summary.
@@ -19,7 +25,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { ANCHOR, createSim } from '../tests/fixtures/market-sim.mjs';
-import { SILENT_RECONNECT_MS, STALE_AFTER_MS } from '../js/config.js';
+import { POLL_FRESH_MS, SILENT_RECONNECT_MS, STALE_AFTER_MS } from '../js/config.js';
 
 const PLAYWRIGHT = '/opt/node22/lib/node_modules/playwright/index.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -27,7 +33,11 @@ const PREFIX = '/angels/';
 const FAPI = /^https:\/\/fapi\.binance\.com\//;
 const PROBE = /^https:\/\/data-api\.binance\.vision\//;
 const FSTREAM = /^wss:\/\/fstream\.binance\.com\//;
-const SCENARIOS = ['live', 'stale', 'region', 'loading', 'offline', 'swap'];
+const SCENARIOS = ['live', 'stale', 'region', 'loading', 'offline', 'swap', 'nows'];
+const MINUTE = 60_000;
+const DAY = 86_400_000;
+/** The simulator's price path is fine-grained over this window around ANCHOR. */
+const AT_RANGE = [ANCHOR - 25 * DAY, ANCHOR + 2 * 3_600_000];
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -57,9 +67,9 @@ const INTERVAL_MS = {
 function usage(message) {
   if (message) console.error(`dev-harness: ${message}`);
   console.error(
-    'Usage: node tools/dev-harness.mjs --shot <outdir> [--scenario live|stale|region|loading|offline|swap|all]\n' +
+    'Usage: node tools/dev-harness.mjs --shot <outdir> [--scenario live|stale|region|loading|offline|swap|nows|all]\n' +
       '                                  [--width 1440 --height 900] [--dpr 1] [--full] [--reduced-motion]\n' +
-      '                                  [--page index.html]',
+      '                                  [--page index.html] [--at 2026-10-13T20:30:00Z]',
   );
   process.exit(2);
 }
@@ -77,6 +87,7 @@ function options() {
         full: { type: 'boolean', default: false },
         'reduced-motion': { type: 'boolean', default: false },
         page: { type: 'string', default: 'index.html' },
+        at: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
     }).values;
@@ -92,7 +103,18 @@ function options() {
     if (!Number.isFinite(n) || n <= 0) usage(`--${name} must be a positive number, got "${v}"`);
     return n;
   };
+  let start = ANCHOR;
+  if (parsed.at !== undefined) {
+    start = Date.parse(parsed.at);
+    if (!Number.isFinite(start)) usage(`--at must be an ISO time, got "${parsed.at}"`);
+    if (start < AT_RANGE[0] || start > AT_RANGE[1]) {
+      usage(
+        `--at must lie between ${new Date(AT_RANGE[0]).toISOString()} and ${new Date(AT_RANGE[1]).toISOString()}, where the simulator has data`,
+      );
+    }
+  }
   return {
+    start,
     outDir: resolve(parsed.shot),
     scenarios,
     width: num('width', parsed.width),
@@ -267,7 +289,11 @@ async function runScenario(browser, sim, scenario, opts, origin) {
   /** @type {{ scenario: string, type: string, text: string, location?: string, expected?: boolean }[]} */
   const log = [];
   const expectedFailure = (/** @type {string} */ text) =>
-    (scenario === 'region' || scenario === 'offline') && /ERR_FAILED|Failed to load resource|net::/.test(text);
+    ((scenario === 'region' || scenario === 'offline') && /ERR_FAILED|Failed to load resource|net::/.test(text)) ||
+    (scenario === 'stale' && /ERR_INTERNET_DISCONNECTED/.test(text));
+  // The stale scenario takes the whole network away (stream and REST): with REST alive
+  // the page would rightly fall back to polling and never be stale.
+  let restDown = false;
   page.on('console', (m) => {
     if (m.type() !== 'error' && m.type() !== 'warning') return;
     const loc = m.location();
@@ -283,6 +309,7 @@ async function runScenario(browser, sim, scenario, opts, origin) {
   page.on('requestfailed', (req) => {
     const url = req.url();
     const expected =
+      (scenario === 'stale' && req.failure()?.errorText === 'net::ERR_INTERNET_DISCONNECTED') ||
       (scenario === 'region' && FAPI.test(url)) ||
       (scenario === 'offline' && (FAPI.test(url) || PROBE.test(url))) ||
       // Swapping roles replaces Plate II's emblem; the browser drops the old download.
@@ -298,10 +325,11 @@ async function runScenario(browser, sim, scenario, opts, origin) {
   // Simulated time follows the page clock: it starts at ANCHOR when the document is
   // created and runs in real time, plus whatever the scenario fast-forwards. The exact
   // start is only known after navigation, so Binance answers wait for it.
-  await page.clock.install({ time: ANCHOR });
+  const start = opts.start;
+  await page.clock.install({ time: start });
   let realStart = Date.now();
   let skipped = 0;
-  const simNow = () => ANCHOR + (Date.now() - realStart) + skipped;
+  const simNow = () => start + (Date.now() - realStart) + skipped;
   /** @type {() => void} */
   let markClockSynced = () => {};
   const clockSynced = new Promise((done) => {
@@ -322,6 +350,10 @@ async function runScenario(browser, sim, scenario, opts, origin) {
   );
   await page.route(FAPI, async (route) => {
     if (scenario === 'loading') return; // never answered: the page stays in its loading state
+    if (restDown) {
+      await route.abort('internetdisconnected');
+      return;
+    }
     if (scenario === 'region' || scenario === 'offline') {
       // A real browser cannot read Binance's 451 (no CORS headers), so fetch fails as
       // if the network did; route.fulfill would add CORS headers and hide that.
@@ -342,7 +374,7 @@ async function runScenario(browser, sim, scenario, opts, origin) {
     });
   });
   await page.routeWebSocket(FSTREAM, (ws) => {
-    if (scenario === 'region' || scenario === 'offline') {
+    if (scenario === 'region' || scenario === 'offline' || scenario === 'nows') {
       ws.close({ code: 1008, reason: 'dev-harness: stream refused' });
       return;
     }
@@ -405,7 +437,7 @@ async function runScenario(browser, sim, scenario, opts, origin) {
   const response = await page.goto(url, { waitUntil: 'commit' });
   if (!response || !response.ok()) throw new Error(`dev-harness: ${url} answered ${response?.status() ?? 'nothing'}`);
   const pageNow = await page.evaluate(() => Date.now());
-  realStart = Date.now() - (pageNow - ANCHOR);
+  realStart = Date.now() - (pageNow - start);
   markClockSynced();
   await page.waitForLoadState('load');
 
@@ -413,8 +445,10 @@ async function runScenario(browser, sim, scenario, opts, origin) {
     case 'live': {
       await sleep(2500);
       await shot('boot');
-      // ANCHOR is 4 s before 20:45:00; wait for the candle close plus a moment.
-      await sleep(Math.max(0, ANCHOR + 5500 - simNow()));
+      // ANCHOR is 4 s before 20:45:00; wait for the candle close plus a moment (from
+      // another --at, only if a 15 m boundary is that close).
+      const boundary = Math.ceil(start / (15 * MINUTE)) * 15 * MINUTE;
+      await sleep(boundary - start <= 10_000 ? Math.max(0, boundary + 1500 - simNow()) : 3000);
       await shot('candle-closed');
       sockets.at(-1)?.close(1001, 'dev-harness: scripted drop');
       await sleep(3000);
@@ -425,14 +459,28 @@ async function runScenario(browser, sim, scenario, opts, origin) {
       await sleep(2500);
       await shot('live');
       for (const s of sockets) s.pause();
+      restDown = true;
       await fastForward(STALE_AFTER_MS + 2000);
       await sleep(400);
+      // Past the bootstrap's freshness, so the REST fallback cannot vouch for it either.
+      await fastForward(POLL_FRESH_MS);
+      await sleep(400);
       await shot('stale');
+      restDown = false;
       for (const s of sockets) s.resume();
       // The resumed socket was replaced anyway: silence past the watchdog limit.
       await fastForward(SILENT_RECONNECT_MS);
       await sleep(2500);
       await shot('recovered');
+      break;
+    }
+    case 'nows': {
+      await sleep(3000);
+      await shot('connecting');
+      await sleep(7000);
+      await shot('polling');
+      await sleep(13_000);
+      await shot('polled-again');
       break;
     }
     case 'region':

@@ -5,16 +5,18 @@ import {
   ECHO,
   INK,
   PAPER,
+  SOLID_AT,
   blurK,
   blurStep,
   boxesForGauss,
   echoBucket,
   gaussBlur,
   hash01,
-  inkStats,
   massKey,
   massParams,
+  moveOf,
   renderDissolve,
+  renderLayers,
   smear,
   trailOf,
 } from '../js/ui/dissolve.js';
@@ -25,6 +27,27 @@ function block(w, h, x0, y0, x1, y1) {
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) a[y * w + x] = 1;
   return a;
 }
+
+/**
+ * Count and centroid of the INK pixels.
+ * @param {Uint8Array} out
+ * @param {number} w
+ */
+function inkStats(out, w) {
+  let n = 0;
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] !== INK) continue;
+    n++;
+    sx += i % w;
+    sy += Math.floor(i / w);
+  }
+  return { count: n, cx: n ? sx / n : NaN, cy: n ? sy / n : NaN };
+}
+
+/** A Move as a fresh reading of `changePct`. */
+const mv = (/** @type {number|null} */ changePct) => moveOf(null, changePct);
 
 test('blurStep quantises the 0–100 percentile into 8 steps and refuses unknown values', () => {
   assert.equal(blurStep(0), 0);
@@ -63,7 +86,7 @@ test('echoBucket only moves in 0.75 % steps, so ticks never re-render the mass',
 });
 
 test('massKey is stable within a step and changes across steps or move direction', () => {
-  const k = (percentile, changePct) => massKey({ percentile, changePct });
+  const k = (percentile, changePct) => massKey({ percentile, move: mv(changePct) });
   assert.equal(k(30, 0.42), k(31, 0.43), 'a tick inside the same buckets');
   assert.notEqual(k(30, 0.42), k(40, 0.42), 'next blur step');
   assert.notEqual(k(30, 0.42), k(30, -0.42), 'direction flips');
@@ -71,8 +94,8 @@ test('massKey is stable within a step and changes across steps or move direction
 });
 
 test('massParams: a stormy market blurs further and trails longer than a calm one', () => {
-  const calm = massParams({ percentile: 30, changePct: 0.7, size: 400, massWidth: 1000 });
-  const storm = massParams({ percentile: 87, changePct: -2.6, size: 400, massWidth: 1000 });
+  const calm = massParams({ percentile: 30, move: mv(0.7), size: 400, massWidth: 1000 });
+  const storm = massParams({ percentile: 87, move: mv(-2.6), size: 400, massWidth: 1000 });
   assert.ok(storm.sigma > 2 * calm.sigma, `storm sigma ${storm.sigma} vs calm ${calm.sigma}`);
   assert.ok(storm.trailLength > 2 * calm.trailLength);
   assert.equal(calm.latent, false);
@@ -83,7 +106,7 @@ test('massParams: a stormy market blurs further and trails longer than a calm on
 });
 
 test('massParams with an unknown percentile asks for a latent impression, no encoding', () => {
-  const p = massParams({ percentile: null, changePct: null, size: 400, massWidth: 1000 });
+  const p = massParams({ percentile: null, move: mv(null), size: 400, massWidth: 1000 });
   assert.equal(p.latent, true);
   assert.equal(p.step, null);
   assert.equal(p.trailLength, 0);
@@ -223,5 +246,83 @@ test('renderDissolve rejects a coverage array of the wrong size', () => {
         seed: 1,
       }),
     RangeError,
+  );
+});
+
+test('moveOf: a price hovering at its 24 h open does not flip the trail on every tick', () => {
+  let m = moveOf(null, 0.02);
+  assert.deepEqual(m, { sign: 1, bucket: 1 });
+  for (const c of [-0.01, 0.03, -0.04, 0.01, -0.049]) {
+    m = moveOf(m, c);
+    assert.equal(m.sign, 1, `${c} stays inside the dead band`);
+  }
+  m = moveOf(m, -0.05);
+  assert.equal(m.sign, -1, 'past the band the side changes');
+  assert.equal(moveOf(m, -0.01).sign, -1);
+  assert.deepEqual(moveOf(m, null), { sign: 0, bucket: 0 }, 'unknown change');
+});
+
+test('moveOf: the echo bucket needs a margin past its boundary both ways', () => {
+  let m = moveOf(null, 0.7);
+  assert.equal(m.bucket, 1);
+  m = moveOf(m, 0.8);
+  assert.equal(m.bucket, 1, '0.80 % is past 0.75 by less than the margin');
+  m = moveOf(m, 0.85);
+  assert.equal(m.bucket, 2);
+  m = moveOf(m, 0.7);
+  assert.equal(m.bucket, 2, 'back under the boundary by less than the margin');
+  m = moveOf(m, 0.64);
+  assert.equal(m.bucket, 1);
+  assert.equal(moveOf(moveOf(null, 0.2), 3).bucket, 4, 'a big jump moves straight to its bucket');
+});
+
+test('massKey stays put while the change oscillates around zero and a bucket edge', () => {
+  let m = moveOf(null, 0.03);
+  const key = massKey({ percentile: 40, move: m });
+  for (let i = 0; i < 200; i++) {
+    m = moveOf(m, (i % 2 ? 1 : -1) * 0.03);
+    assert.equal(massKey({ percentile: 40, move: m }), key);
+  }
+});
+
+test('renderLayers: RGBA for the canvases and one smooth solid region for the inversion', () => {
+  const w = 120;
+  const h = 80;
+  const alpha = block(w, h, 30, 20, 90, 60);
+  const args = { alpha, width: w, height: h, sigma: 3, trailLength: 8, trail: { x: -1, y: 1 }, seed: 1498 };
+  const codes = renderDissolve(args);
+  const colors = { echo: [0x61, 0x61, 0x61], latent: [0xdc, 0xdc, 0xdc] };
+  const out = renderLayers({ ...args, latent: false, colors });
+  assert.equal(out.ink.length, w * h * 4);
+  for (let i = 0; i < codes.length; i++) {
+    assert.equal(out.ink[i * 4 + 3] === 255, codes[i] === INK, `ink alpha at ${i}`);
+  }
+  const solid = /** @type {Uint8ClampedArray} */ (out.solid);
+  const at = (/** @type {number} */ x, /** @type {number} */ y) => solid[(y * w + x) * 4 + 3] === 255;
+  assert.ok(at(60, 40), 'the core is solid');
+  assert.ok(!at(2, 2), 'the far corner is not');
+  // Smooth: across the region there is no isolated pixel, unlike the dots.
+  let isolated = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const c = at(x, y);
+      if (c !== at(x - 1, y) && c !== at(x + 1, y) && c !== at(x, y - 1) && c !== at(x, y + 1)) isolated++;
+    }
+  }
+  assert.equal(isolated, 0);
+  // Solid means dense: inside the region at least SOLID_AT of the pixels are dots, on average.
+  let n = 0;
+  let ink = 0;
+  for (let i = 0; i < codes.length; i++) {
+    if (solid[i * 4 + 3] !== 255) continue;
+    n++;
+    if (codes[i] === INK) ink++;
+  }
+  assert.ok(ink / n >= SOLID_AT, `density inside ${ink / n}`);
+  const latent = renderLayers({ ...args, density: 0.42, latent: true, colors });
+  assert.equal(latent.solid, null, 'no inversion for the pale impression');
+  assert.ok(
+    latent.ink.every((v) => v === 0),
+    'the latent impression has no black dots',
   );
 });

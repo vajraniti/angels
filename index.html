@@ -173,12 +173,14 @@
           <span class="peri__l">Vol, USDT</span><span class="peri__v" data-v="volume">—</span>
         </p>
         <p class="peri peri--oi" aria-hidden="true">
-          <span class="peri__l">Open interest</span><span class="peri__v" data-v="oi">—</span
-          ><small data-hero="oiUnit">XAU</small><span class="peri__eq">=</span
-          ><span class="peri__v" data-v="oiValue">—</span><small>USDT</small>
+          <span class="peri__l">Open interest</span>
+          <span class="peri__q"><span class="peri__v" data-v="oi">—</span><small data-hero="oiUnit">XAU</small></span>
+          <span class="peri__q"
+            ><span class="peri__eq">=</span><span class="peri__v" data-v="oiValue">—</span><small>USDT</small></span
+          >
         </p>
 
-        <div class="mincho" aria-hidden="true" data-hero-mincho></div>
+        <div class="mincho" lang="ja" aria-hidden="true" data-hero-mincho></div>
 
         <p class="hero__notice" data-hero-notice hidden>
           <span class="hero__notice-h" data-notice="headline"></span>
@@ -216,13 +218,14 @@
           </nav>
         </div>
         <div class="plate__body">
-          <p class="plate__mincho" aria-hidden="true" data-plate1="mincho">金　十五分足</p>
+          <p class="plate__mincho" lang="ja" aria-hidden="true" data-plate1="mincho">金　十五分足</p>
           <div class="plate__frame">
             <canvas
               class="plate__canvas"
               data-chart
               role="img"
-              aria-label="Candlestick chart; the line below the plate gives the values of the candle under the pointer"
+              tabindex="0"
+              aria-label="Candlestick chart. The line below the plate gives the values of the candle under the pointer; with the keyboard, the left and right arrow keys step through the candles."
             ></canvas>
             <p class="plate__msg" data-chart-msg hidden></p>
             <span class="plate__fig" aria-hidden="true"><i>Fig. 1</i></span>
@@ -294,7 +297,7 @@
             </dl>
           </div>
           <svg class="rangebar" data-rangebar role="img" aria-label="24 hour range"></svg>
-          <p class="p2__mincho" aria-hidden="true" data-plate2-mincho></p>
+          <p class="p2__mincho" lang="ja" aria-hidden="true" data-plate2-mincho></p>
         </div>
       </section>
     </main>

@@ -142,7 +142,21 @@ export function formatUtcClock(ms, { seconds = true } = {}) {
   return seconds ? `${hm}:${pad2(d.getUTCSeconds())}` : hm;
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** English month abbreviations, shared with the chart's time axis. */
+export const MONTHS = Object.freeze([
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]);
 
 /**
  * UTC date for the imprint: "13 Oct 2026".

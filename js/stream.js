@@ -74,8 +74,17 @@ export function createStreamClient({
     throw new TypeError('createStreamClient: WebSocketImpl must be a constructor');
 
   let desired = new Set(streams);
-  /** Streams the current socket is subscribed to (URL plus acknowledged changes). */
+  /**
+   * Streams the current socket is subscribed to: its URL plus the changes sent since.
+   * A SUBSCRIBE counts as active once sent (so a quick second reconcile does not send
+   * it twice) and is taken back out if Binance answers it with an error.
+   */
   let active = new Set();
+  /** @type {Map<number, { method: 'SUBSCRIBE'|'UNSUBSCRIBE', params: string[] }>} requests awaiting a reply */
+  const pending = new Map();
+  /** Streams whose SUBSCRIBE Binance rejected; cleared per stream when its data arrives. */
+  const rejected = new Set();
+  let rejectAttempt = 0;
   /** @type {WebSocket|null} */
   let ws = null;
   let running = false;
@@ -128,6 +137,8 @@ export function createStreamClient({
     }
     ws = sock;
     active = new Set(list);
+    // Replies to requests sent on an earlier socket will never come.
+    pending.clear();
     createdAt = now();
     openedAt = 0;
     deliveredThisSocket = false;
@@ -258,18 +269,43 @@ export function createStreamClient({
       lastMessageAt = now();
       deliveredThisSocket = true;
       deliveredBefore = true;
+      if (rejected.delete(msg.stream) && rejected.size === 0) rejectAttempt = 0;
       events.onData(msg.stream, msg.data);
       return;
     }
-    if (msg && typeof msg === 'object' && 'id' in msg && 'result' in msg) return; // ack of (UN)SUBSCRIBE
+    if (msg && typeof msg === 'object' && 'id' in msg && 'result' in msg) {
+      pending.delete(msg.id); // ack of (UN)SUBSCRIBE
+      return;
+    }
     if (msg && typeof msg === 'object' && ('code' in msg || 'error' in msg)) {
       const e = msg.error && typeof msg.error === 'object' ? msg.error : msg;
+      const req = typeof msg.id === 'number' ? pending.get(msg.id) : undefined;
+      if (req) pending.delete(msg.id);
+      let retry = null;
+      if (req) {
+        // Undo the optimistic bookkeeping so the next reconcile asks again, after a
+        // backoff: Binance drops a client that sends more than 10 messages a second.
+        if (req.method === 'SUBSCRIBE') {
+          for (const p of req.params) {
+            active.delete(p);
+            if (desired.has(p)) rejected.add(p);
+          }
+        } else {
+          for (const p of req.params) active.add(p);
+        }
+        const delay = backoffDelay(rejectAttempt++, backoff, random);
+        retry = now() + delay;
+        scheduleReconcile(delay);
+      }
+      const what = req
+        ? `${req.method === 'SUBSCRIBE' ? 'subscribing to' : 'unsubscribing from'} ${req.params.join(', ')}`
+        : 'a subscription request';
       events.onError(
-        new MarketError('stream', `Live stream: Binance rejected a subscription request (code ${e.code}: ${e.msg})`, {
+        new MarketError('stream', `Live stream: Binance rejected ${what} (code ${e.code}: ${e.msg})`, {
           code: typeof e.code === 'number' ? e.code : undefined,
           detail: typeof e.msg === 'string' ? e.msg : undefined,
         }),
-        null,
+        retry,
       );
       return;
     }
@@ -288,9 +324,20 @@ export function createStreamClient({
     if (!sock || sock.readyState !== OPEN) return;
     const remove = [...active].filter((s) => !desired.has(s));
     const add = [...desired].filter((s) => !active.has(s));
-    if (remove.length) sock.send(JSON.stringify({ method: 'UNSUBSCRIBE', params: remove, id: nextId++ }));
-    if (add.length) sock.send(JSON.stringify({ method: 'SUBSCRIBE', params: add, id: nextId++ }));
+    if (remove.length) send(sock, 'UNSUBSCRIBE', remove);
+    if (add.length) send(sock, 'SUBSCRIBE', add);
     active = new Set(desired);
+  }
+
+  /**
+   * @param {WebSocket} sock
+   * @param {'SUBSCRIBE'|'UNSUBSCRIBE'} method
+   * @param {string[]} params
+   */
+  function send(sock, method, params) {
+    const id = nextId++;
+    pending.set(id, { method, params });
+    sock.send(JSON.stringify({ method, params, id }));
   }
 
   /**
@@ -300,6 +347,7 @@ export function createStreamClient({
    */
   function setStreams(list) {
     desired = new Set(list);
+    for (const s of rejected) if (!desired.has(s)) rejected.delete(s);
     if (!running) return;
     if (ws && ws.readyState === OPEN) scheduleReconcile(debounceMs);
     else if (!ws && retryTimer === null) open();
@@ -326,6 +374,7 @@ export function createStreamClient({
       lastMessageAt,
       retryAt,
       streams: [...desired],
+      rejected: [...rejected],
     };
   }
 

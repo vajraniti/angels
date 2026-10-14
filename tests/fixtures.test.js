@@ -18,7 +18,7 @@ test('fixture files on disk equal the simulator output (run `npm run fixtures` a
 for (const symbol of ['XAUUSDT', 'CLUSDT']) {
   test(`${symbol}: the 24h ticker summarises exactly the 1m candles of its window`, () => {
     const tk = read(`rest/ticker24hr-${symbol}.json`);
-    const decimals = sim.spec(symbol).priceDecimals;
+    const decimals = sim.spec(symbol).pricePrecision;
     const minutes = sim
       .klines(symbol, '1m', { at: ANCHOR, limit: 1500 })
       .filter((/** @type {any[]} */ k) => k[0] >= tk.openTime);
@@ -55,7 +55,7 @@ test('XAU is the calm instrument and CL the stormy one, with opposite 24h moves'
   const xau = read('rest/ticker24hr-XAUUSDT.json');
   const cl = read('rest/ticker24hr-CLUSDT.json');
   assert.equal(xau.lastPrice, '4012.35');
-  assert.equal(cl.lastPrice, '71.08');
+  assert.equal(cl.lastPrice, '71.08000', 'fapi prints CLUSDT at pricePrecision 5');
   assert.ok(Number(xau.priceChangePercent) > 0);
   assert.ok(Number(cl.priceChangePercent) < 0);
   const rel = (/** @type {any} */ t) => (Number(t.highPrice) - Number(t.lowPrice)) / Number(t.lastPrice);

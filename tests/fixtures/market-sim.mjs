@@ -6,17 +6,24 @@
 //
 //   node tests/fixtures/market-sim.mjs --write   regenerates tests/fixtures/{rest,ws}/*.json
 //
-// String formats copy what fapi actually sends (seen on testnet.binancefuture.com,
-// 2026-10-13): traded prices at the symbol's price precision with trailing zeros kept,
-// mark/index prices padded to 8 decimals, quantities at quantity precision,
-// priceChangePercent with 3 decimals, kline quote volume with 5.
+// String formats copy what fapi actually sends (live replies read through
+// www.binance.com/fapi, 2026-10-14): traded prices at the symbol's pricePrecision with
+// trailing zeros kept, which for CLUSDT is 5 places on a 0.01 tick ("93.66000"); mark,
+// index and funding padded to 8 decimals and not rounded to the tick; quantities at
+// the quantity step; priceChangePercent with 3 decimals; ticker quote volume at the
+// price precision and kline quote volume at price + quantity precision.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Fixture "now": 20:44:56 UTC, 4 s before a 1m/5m/15m boundary, 3 h 15 m before funding. */
+/**
+ * Fixture "now": 20:44:56 UTC, 4 s before a 1m/5m/15m boundary, 3 h 15 m before the
+ * 00:00 settlement and 44 m after the 20:00 one (both symbols settle every 4 h, as live).
+ */
 export const ANCHOR = Date.UTC(2026, 9, 13, 20, 44, 56);
+/** Funding interval of both symbols, as /fapi/v1/fundingInfo listed it on 2026-10-14. */
+export const FUNDING_HOURS = 4;
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -36,7 +43,8 @@ export const SPECS = {
   XAUUSDT: {
     seed: 1498,
     tick: 0.01,
-    priceDecimals: 2,
+    tickSize: '0.01',
+    pricePrecision: 2,
     qtyDecimals: 3,
     anchorPrice: 4012.35,
     dailyVol: 0.011,
@@ -52,7 +60,8 @@ export const SPECS = {
   CLUSDT: {
     seed: 1617,
     tick: 0.01,
-    priceDecimals: 2,
+    tickSize: '0.01000',
+    pricePrecision: 5,
     qtyDecimals: 2,
     anchorPrice: 71.08,
     dailyVol: 0.022,
@@ -247,7 +256,8 @@ export function createSim() {
 
   /** @param {number} at */
   function nextFundingTime(at) {
-    return Math.floor(at / (8 * HOUR)) * 8 * HOUR + 8 * HOUR;
+    const every = FUNDING_HOURS * HOUR;
+    return Math.floor(at / every) * every + every;
   }
 
   /**
@@ -260,8 +270,8 @@ export function createSim() {
   }
 
   /**
-   * Mark sits on the last trade (rounded to tick, padded to 8 decimals as fapi does);
-   * index is the spot basket, a small basis away and not rounded.
+   * Mark sits near the last trade but off the tick grid ("93.27009403"), index is the
+   * spot basket a small basis away; both are padded to 8 decimals as fapi does.
    * @param {string} symbol
    * @param {number} at
    */
@@ -269,7 +279,7 @@ export function createSim() {
     const spec = need(symbol).spec;
     const last = lastPrice(symbol, at);
     const wobble = 1 + 0.00002 * Math.sin(at / 7_000);
-    const mark = Math.round((last * wobble) / spec.tick) * spec.tick;
+    const mark = last * wobble;
     const index = mark * (1 + spec.basis + 0.00001 * Math.sin(at / 11_000));
     const rate = spec.fundingRate + 0.000003 * Math.sin(at / 600_000);
     return { mark, index, rate, settle: index * (1 + 0.00002) };
@@ -304,7 +314,7 @@ export function createSim() {
      */
     ticker24hr(symbol, at) {
       const { p, w, openTime } = stats24h(symbol, at);
-      const d = p.spec.priceDecimals;
+      const d = p.spec.pricePrecision;
       const change = w.c - w.o;
       return {
         symbol,
@@ -317,7 +327,7 @@ export function createSim() {
         highPrice: w.h.toFixed(d),
         lowPrice: w.l.toFixed(d),
         volume: w.v.toFixed(p.spec.qtyDecimals),
-        quoteVolume: w.q.toFixed(2),
+        quoteVolume: w.q.toFixed(d),
         openTime,
         closeTime: at,
         firstId: w.firstId,
@@ -358,32 +368,73 @@ export function createSim() {
 
     /**
      * GET /fapi/v1/fundingInfo — only symbols with adjusted settings are listed, as on
-     * Binance; CLUSDT is deliberately absent so the default-interval path is exercised.
+     * Binance. Both instruments are listed at 4 h, as live on 2026-10-14; the
+     * default-interval path for an unlisted symbol is covered by unit tests.
      */
     fundingInfo() {
       return [
         {
           symbol: 'BTCUSDT',
-          adjustedFundingRateCap: '0.00300',
-          adjustedFundingRateFloor: '-0.00300',
+          adjustedFundingRateCap: '0.00300000',
+          adjustedFundingRateFloor: '-0.00300000',
           fundingIntervalHours: 8,
           disclaimer: false,
+          updateTime: 1758000000000,
         },
         {
           symbol: 'XAUUSDT',
-          adjustedFundingRateCap: '0.00500',
-          adjustedFundingRateFloor: '-0.00500',
-          fundingIntervalHours: 8,
+          adjustedFundingRateCap: '0.00500000',
+          adjustedFundingRateFloor: '-0.00500000',
+          fundingIntervalHours: FUNDING_HOURS,
           disclaimer: false,
+          updateTime: 1769796333728,
         },
         {
-          symbol: 'BLZUSDT',
-          adjustedFundingRateCap: '0.02500000',
-          adjustedFundingRateFloor: '-0.02500000',
-          fundingIntervalHours: 4,
+          symbol: 'CLUSDT',
+          adjustedFundingRateCap: '0.00500000',
+          adjustedFundingRateFloor: '-0.00500000',
+          fundingIntervalHours: FUNDING_HOURS,
           disclaimer: false,
+          updateTime: 1774959060359,
         },
       ];
+    },
+
+    /**
+     * GET /fapi/v1/exchangeInfo, cut to the fields and symbols the page reads; the
+     * symbol entries copy the live ones (2026-10-14) apart from order types and the like.
+     * @param {number} at
+     */
+    exchangeInfo(at) {
+      const entry = (/** @type {keyof typeof SPECS} */ symbol, /** @type {string} */ base) => {
+        const spec = SPECS[symbol];
+        const step = (10 ** -spec.qtyDecimals).toFixed(spec.qtyDecimals);
+        return {
+          symbol,
+          pair: symbol,
+          contractType: 'TRADIFI_PERPETUAL',
+          status: 'TRADING',
+          baseAsset: base,
+          quoteAsset: 'USDT',
+          marginAsset: 'USDT',
+          pricePrecision: spec.pricePrecision,
+          quantityPrecision: spec.qtyDecimals,
+          filters: [
+            { filterType: 'PRICE_FILTER', tickSize: spec.tickSize, minPrice: spec.tickSize, maxPrice: '200000' },
+            { filterType: 'LOT_SIZE', stepSize: step, minQty: step, maxQty: '500000' },
+            { filterType: 'MIN_NOTIONAL', notional: '5' },
+          ],
+        };
+      };
+      return {
+        timezone: 'UTC',
+        serverTime: at,
+        futuresType: 'U_MARGINED',
+        rateLimits: [{ rateLimitType: 'REQUEST_WEIGHT', interval: 'MINUTE', intervalNum: 1, limit: 2400 }],
+        exchangeFilters: [],
+        assets: [],
+        symbols: [entry('XAUUSDT', 'XAU'), entry('CLUSDT', 'CL')],
+      };
     },
 
     /**
@@ -419,7 +470,7 @@ export function createSim() {
       const len = intervalLength(interval);
       const w = window(p, t, Math.min(t + len - 1, until));
       if (!w) return null;
-      const d = p.spec.priceDecimals;
+      const d = p.spec.pricePrecision;
       const qd = p.spec.qtyDecimals;
       const takerShare = 0.48 + 0.04 * Math.sin(t / 3_600_000);
       return [
@@ -430,10 +481,10 @@ export function createSim() {
         w.c.toFixed(d),
         w.v.toFixed(qd),
         t + len - 1,
-        w.q.toFixed(5),
+        w.q.toFixed(d + qd),
         w.n,
         (w.v * takerShare).toFixed(qd),
-        (w.q * takerShare).toFixed(5),
+        (w.q * takerShare).toFixed(d + qd),
         '0',
       ];
     },
@@ -548,6 +599,8 @@ export function createSim() {
           return { status: 200, body: this.serverTime(at) };
         case '/fapi/v1/fundingInfo':
           return { status: 200, body: this.fundingInfo() };
+        case '/fapi/v1/exchangeInfo':
+          return { status: 200, body: this.exchangeInfo(at) };
         case '/fapi/v1/ticker/24hr':
           return known(symbol) ? { status: 200, body: this.ticker24hr(symbol, at) } : bad;
         case '/fapi/v1/premiumIndex':
@@ -588,6 +641,7 @@ export function fixtureFiles() {
   const wrap = (/** @type {string} */ stream, /** @type {unknown} */ data) => ({ stream, data });
   files.set('rest/time.json', sim.serverTime(at));
   files.set('rest/fundingInfo.json', sim.fundingInfo());
+  files.set('rest/exchangeInfo.json', sim.exchangeInfo(at));
   files.set('rest/error-451.json', REGION_BLOCK_BODY);
   files.set('rest/error-invalid-symbol.json', { code: -1121, msg: 'Invalid symbol.' });
   for (const s of SIM_SYMBOLS) {
