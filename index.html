@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XAU / CL Perpetuals</title>
+    <meta
+      name="description"
+      content="Gold (XAUUSDT) and WTI crude oil (CLUSDT) perpetuals on Binance USDⓈ-M Futures: price, 24 h change, high and low, volume, funding and open interest, read live in your browser."
+    />
+    <meta name="color-scheme" content="light" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..700;1,6..96,400..700&family=Archivo:wdth,wght@62..125,100..900&display=swap"
+    />
+    <!-- One-word and vertical faces are cut to the characters the page can set (brief 3). -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pinyon+Script&text=aurumoleum&display=swap" />
+    <link
+      rel="stylesheet"
+      data-mincho
+      href="https://fonts.googleapis.com/css2?family=Shippori+Mincho&text=%E3%80%87%E4%B8%80%E4%BA%8C%E4%B8%89%E5%9B%9B%E4%BA%94%E5%85%AD%E4%B8%83%E5%85%AB%E4%B9%9D%E5%8D%81%E9%87%91%E5%8E%9F%E6%B2%B9%E5%88%86%E8%B6%B3%E6%99%82%E9%96%93%E6%97%A5%E7%84%A1%E6%9C%9F%E9%99%90%E5%85%88%E7%89%A9%E8%B3%87%E8%AA%BF%E9%81%94%E7%8E%87%E6%AC%A1%E5%9B%9E%E3%81%BE%E3%81%A7%E6%AF%8E%E3%82%82%E3%81%AA%E3%81%8F%E3%80%80&display=swap"
+    />
+    <link rel="stylesheet" href="css/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23FBFBF9'/%3E%3Cpath d='M7 1h2v14H7zM3 5h10v2H3z' fill='%23111'/%3E%3C/svg%3E"
+    />
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body data-status="connecting">
+    <svg class="sprite" aria-hidden="true" focusable="false">
+      <!-- Glyphs the text faces lack, drawn once so every OS shows the same shape. -->
+      <symbol id="g-up" viewBox="0 0 10 10"><path d="M5 1.2 9.2 8.8H.8z" fill="currentColor" /></symbol>
+      <symbol id="g-dn" viewBox="0 0 10 10">
+        <path d="M5 8.4 1.6 2.1h6.8z" fill="none" stroke="currentColor" stroke-width="1.1" />
+      </symbol>
+      <symbol id="g-halo" viewBox="0 0 16 10">
+        <ellipse cx="8" cy="5" rx="6.6" ry="3.4" fill="none" stroke="currentColor" stroke-width="1" />
+        <ellipse cx="8.2" cy="4.9" rx="6.4" ry="3.5" fill="none" stroke="currentColor" stroke-width=".6" />
+      </symbol>
+      <symbol id="g-halo-open" viewBox="0 0 16 10">
+        <path d="M3.4 2.5A6.6 3.4 0 1 0 12.9 2.4" fill="none" stroke="currentColor" stroke-width="1" />
+      </symbol>
+      <symbol id="g-s" viewBox="0 0 14 14">
+        <circle cx="7" cy="7" r="6.2" fill="none" stroke="currentColor" stroke-width=".9" />
+        <path
+          d="M9.3 4.6c-.4-.7-1.2-1.1-2.2-1.1-1.3 0-2.2.7-2.2 1.7 0 2.3 4.6 1.3 4.6 3.7 0 1.1-1 1.8-2.4 1.8-1.1 0-2-.5-2.4-1.3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.05"
+          stroke-linecap="round"
+        />
+      </symbol>
+      <!-- Stale figures turn into a mosaic of n-px blocks (brief: states): a block is
+           ink when any of its pixels is, so even a Didone hairline survives as a row
+           of blocks. Dilate to the block's maximum, keep one sample per block, spread
+           the sample over the block again, and snap its alpha to 0 or 1. -->
+      <filter id="mosaic-8" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">
+        <feMorphology in="SourceGraphic" operator="dilate" radius="4" result="max" />
+        <feFlood x="4" y="4" width="1" height="1" />
+        <feComposite width="8" height="8" />
+        <feTile result="grid" />
+        <feComposite in="max" in2="grid" operator="in" />
+        <feMorphology operator="dilate" radius="4" />
+        <feComponentTransfer>
+          <feFuncA type="discrete" tableValues="0 1" />
+        </feComponentTransfer>
+      </filter>
+      <filter id="mosaic-4" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">
+        <feMorphology in="SourceGraphic" operator="dilate" radius="2" result="max" />
+        <feFlood x="2" y="2" width="1" height="1" />
+        <feComposite width="4" height="4" />
+        <feTile result="grid" />
+        <feComposite in="max" in2="grid" operator="in" />
+        <feMorphology operator="dilate" radius="2" />
+        <feComponentTransfer>
+          <feFuncA type="discrete" tableValues="0 1" />
+        </feComponentTransfer>
+      </filter>
+      <filter id="mosaic-2" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">
+        <feMorphology in="SourceGraphic" operator="dilate" radius="1" result="max" />
+        <feFlood x="1" y="1" width="1" height="1" />
+        <feComposite width="2" height="2" />
+        <feTile result="grid" />
+        <feComposite in="max" in2="grid" operator="in" />
+        <feMorphology operator="dilate" radius="1" />
+        <feComponentTransfer>
+          <feFuncA type="discrete" tableValues="0 1" />
+        </feComponentTransfer>
+      </filter>
+    </svg>
+
+    <header class="tape" aria-label="Market summary">
+      <p class="tape__row tape__row--sym">
+        <span class="tk" data-tape-sym="XAUUSDT"
+          ><b>XAUUSDT</b> <span data-v="last">—</span> <svg class="g" aria-hidden="true" hidden><use /></svg
+          ><span data-v="changePct">—</span></span
+        >
+        <span class="tk" data-tape-sym="CLUSDT"
+          ><b>CLUSDT</b> <span data-v="last">—</span> <svg class="g" aria-hidden="true" hidden><use /></svg
+          ><span data-v="changePct">—</span></span
+        >
+      </p>
+      <p class="tape__row tape__row--rest">
+        <span class="tk tk--funding"><b>Funding</b> <span data-tape="funding">—</span></span>
+        <span class="tk"><b>Next</b> <span data-tape="next">—</span></span>
+        <span class="tk tk--time"><span data-tape="clock">—</span> UTC</span>
+        <span class="tk tk--status"
+          ><svg class="halo" aria-hidden="true"><use href="#g-halo-open" /></svg><b data-tape="status">Connecting</b>
+          <span class="tk__age" data-tape="age"></span
+        ></span>
+      </p>
+    </header>
+
+    <main>
+      <h1 class="vh">Gold and WTI crude oil perpetuals on Binance USDⓈ-M Futures, live</h1>
+
+      <section class="hero" id="hero" aria-labelledby="hero-title" data-main="XAUUSDT">
+        <h2 class="vh" id="hero-title" data-hero="title">XAUUSDT, gold perpetual</h2>
+        <!-- Read by screen readers instead of the collage, which is set for the eye. -->
+        <dl class="vh" data-hero-sr>
+          <dt>Last price, USDT</dt>
+          <dd data-v="last">—</dd>
+          <dt>24 hour change</dt>
+          <dd><span data-v="change">—</span> (<span data-v="changePct">—</span>)</dd>
+          <dt>24 hour high</dt>
+          <dd data-v="high">—</dd>
+          <dt>24 hour low</dt>
+          <dd data-v="low">—</dd>
+          <dt>24 hour volume, USDT</dt>
+          <dd data-v="volume">—</dd>
+          <dt>Funding rate</dt>
+          <dd data-v="funding">—</dd>
+          <dt>Next funding in</dt>
+          <dd data-v="countdown">—</dd>
+          <dt>Open interest, contracts</dt>
+          <dd data-v="oi">—</dd>
+          <dt>Open interest, USDT</dt>
+          <dd data-v="oiValue">—</dd>
+        </dl>
+
+        <canvas class="hero__echo" data-mass-echo aria-hidden="true"></canvas>
+        <!-- The sharp layer is set twice: ink on paper, and paper on the dissolved mass
+             (masked to the mass's own dots), so it inverts exactly where the mass is. -->
+        <div class="crisp crisp--ink" data-crisp aria-hidden="true">
+          <svg class="geo" data-geo>
+            <g data-geo-cross></g>
+            <g data-geo-dial></g>
+          </svg>
+          <div class="pricebox" data-pricebox>
+            <p class="price" data-grouped="last">—</p>
+            <p class="change">
+              <svg class="g" hidden><use /></svg><span data-v="change">—</span>
+              <span class="change__pct" data-v="changePct">—</span>
+            </p>
+          </div>
+          <p class="script" data-hero-script>aurum</p>
+        </div>
+        <canvas class="hero__ink" data-mass-ink aria-hidden="true"></canvas>
+        <div class="crisp crisp--paper" data-crisp-paper aria-hidden="true"></div>
+
+        <nav class="roles" aria-label="Main instrument">
+          <button type="button" data-set-main="XAUUSDT" aria-pressed="true">XAU</button
+          ><span class="roles__bar" aria-hidden="true">|</span
+          ><button type="button" data-set-main="CLUSDT" aria-pressed="false">CL</button>
+        </nav>
+
+        <p class="marg" aria-hidden="true" data-hero="marg">XAUUSDT · gold, perpetual</p>
+
+        <p class="peri peri--vol" aria-hidden="true">
+          <span class="peri__l">Vol, USDT</span><span class="peri__v" data-v="volume">—</span>
+        </p>
+        <p class="peri peri--oi" aria-hidden="true">
+          <span class="peri__l">Open interest</span><span class="peri__v" data-v="oi">—</span
+          ><small data-hero="oiUnit">XAU</small><span class="peri__eq">=</span
+          ><span class="peri__v" data-v="oiValue">—</span><small>USDT</small>
+        </p>
+
+        <div class="mincho" aria-hidden="true" data-hero-mincho></div>
+
+        <p class="hero__notice" data-hero-notice hidden>
+          <span class="hero__notice-h" data-notice="headline"></span>
+          <span class="hero__notice-d" data-notice="detail"></span>
+        </p>
+
+        <a class="second" href="#plate2" data-second>
+          <span class="second__t" data-second="title">CLUSDT · WTI crude</span>
+          <span class="second__p" data-grouped="last">—</span>
+          <span class="second__c"
+            ><svg class="g" aria-hidden="true" hidden><use /></svg><span data-v="change">—</span>
+            <span data-v="changePct">—</span></span
+          >
+          <span class="second__go">Plate II ↓</span>
+        </a>
+      </section>
+
+      <section class="plate" id="plate1" aria-labelledby="plate1-title">
+        <div class="plate__head">
+          <h2 class="plate__cap" id="plate1-title">
+            <i>Plate I.</i> <span data-plate1="title">XAUUSDT, perpetual, 15 min.</span>
+          </h2>
+          <nav class="switch" aria-label="Chart instrument">
+            <button type="button" data-set-main="XAUUSDT" aria-pressed="true">XAUUSDT</button
+            ><span class="switch__bar" aria-hidden="true">|</span
+            ><button type="button" data-set-main="CLUSDT" aria-pressed="false">CLUSDT</button>
+          </nav>
+          <nav class="switch switch--tf" aria-label="Chart timeframe">
+            <button type="button" data-interval="1m" aria-pressed="false">1m</button>
+            <button type="button" data-interval="5m" aria-pressed="false">5m</button>
+            <button type="button" data-interval="15m" aria-pressed="true">15m</button>
+            <button type="button" data-interval="1h" aria-pressed="false">1h</button>
+            <button type="button" data-interval="4h" aria-pressed="false">4h</button>
+            <button type="button" data-interval="1d" aria-pressed="false">1d</button>
+          </nav>
+        </div>
+        <div class="plate__body">
+          <p class="plate__mincho" aria-hidden="true" data-plate1="mincho">金　十五分足</p>
+          <div class="plate__frame">
+            <canvas
+              class="plate__canvas"
+              data-chart
+              role="img"
+              aria-label="Candlestick chart; the line below the plate gives the values of the candle under the pointer"
+            ></canvas>
+            <p class="plate__msg" data-chart-msg hidden></p>
+            <span class="plate__fig" aria-hidden="true"><i>Fig. 1</i></span>
+          </div>
+        </div>
+        <p class="plate__ohlc" data-chart-ohlc aria-live="off"></p>
+        <p class="plate__note">
+          Hollow body: close above open. Solid body: close below open. The screened candle is still forming; its screen
+          darkens as its period runs out. Dotted lines: 24 h high and low. Volume in USDT, one stroke per candle.
+        </p>
+      </section>
+
+      <section class="p2" id="plate2" aria-labelledby="plate2-title" data-symbol="CLUSDT" data-emblem="dark">
+        <h2 class="p2__cap" id="plate2-title">
+          <i>Plate II.</i> <span data-plate2="title">CLUSDT, WTI crude oil, perpetual.</span>
+        </h2>
+        <div class="p2__body">
+          <figure class="p2__emblem" data-emblem-fig>
+            <picture data-emblem-pic>
+              <source
+                media="(max-width: 760px)"
+                srcset="assets/fludd-darkness-sm.png 1x, assets/fludd-darkness-sm@2x.png 2x"
+                width="216"
+                height="217"
+              />
+              <img
+                src="assets/fludd-darkness.png"
+                srcset="assets/fludd-darkness.png 1x, assets/fludd-darkness@2x.png 2x"
+                width="400"
+                height="403"
+                alt="Robert Fludd, the Great Darkness, 1617: an etched black square with ‘Et sic in infinitum’ on its four sides"
+              />
+            </picture>
+            <figcaption data-emblem-cap>
+              R. Fludd, <i>Utriusque Cosmi</i>, 1617. The darkness before the first day.
+            </figcaption>
+          </figure>
+          <div class="p2__price" aria-hidden="true">
+            <span class="p2__price-ink" data-grouped="last">—</span>
+            <span class="p2__price-paper" data-grouped="last">—</span>
+          </div>
+          <div class="p2__data">
+            <p class="p2__change">
+              <span class="vh">Last price <span data-v="last">—</span> USDT; 24 hour change </span
+              ><svg class="g" aria-hidden="true" hidden><use /></svg><span data-v="change">—</span>
+              <span data-v="changePct">—</span>
+            </p>
+            <dl class="agate">
+              <dt><span>24h high</span></dt>
+              <dd data-v="high">—</dd>
+              <dt><span>24h low</span></dt>
+              <dd data-v="low">—</dd>
+              <dt><span>24h volume, USDT</span></dt>
+              <dd data-v="volume">—</dd>
+              <dt class="rule">
+                <span>Funding, <span data-v="fundingEvery">—</span></span>
+              </dt>
+              <dd class="rule">
+                <span data-v="funding">—</span><a class="dagger" href="#note-funding" aria-label="note on funding">†</a>
+              </dd>
+              <dt><span>Next funding in</span></dt>
+              <dd data-v="countdown">—</dd>
+              <dt>
+                <span>Open interest, <span data-plate2="base">CL</span></span>
+              </dt>
+              <dd data-v="oi">—</dd>
+              <dt><span>Open interest, USDT</span></dt>
+              <dd data-v="oiValue">—</dd>
+            </dl>
+          </div>
+          <svg class="rangebar" data-rangebar role="img" aria-label="24 hour range"></svg>
+          <p class="p2__mincho" aria-hidden="true" data-plate2-mincho></p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="imprint">
+      <figure class="imprint__vignette">
+        <img
+          src="assets/bickham-cherubs.png"
+          srcset="assets/bickham-cherubs.png 1x, assets/bickham-cherubs@2x.png 2x"
+          width="156"
+          height="143"
+          alt="Engraved putti holding a banderole reading ‘Delectando monemus’, inside a wreath"
+        />
+        <figcaption>
+          G. Bickham, <i>The Universal Penman</i>, 1741: <i>delectando monemus</i>, we teach by delighting.
+        </figcaption>
+      </figure>
+      <div class="imprint__text">
+        <p class="imprint__source">
+          Printed live from the Binance USD<svg class="g-s" role="img" aria-label="S"><use href="#g-s" /></svg>-M
+          Futures public API, read directly by your browser: no server of ours, no account, no cookies.
+          <span data-imprint="asof"></span>
+        </p>
+        <p id="note-funding" data-imprint="funding">
+          † Funding is paid between longs and shorts at each settlement; the countdown runs to the next one.
+        </p>
+        <p data-imprint="mass"></p>
+        <p class="imprint__credits">
+          Engravings, public domain: R. Fludd, <i>Utriusque Cosmi</i>, 1617 · A. Dürer,
+          <i>St John Devouring the Book</i>, 1498 (Rijksmuseum, CC0) · G. Bickham, <i>The Universal Penman</i>, 1741.
+          Via Wikimedia Commons.
+        </p>
+        <p class="imprint__credits">Set in Bodoni Moda, Archivo, Pinyon Script and Shippori Mincho.</p>
+        <p class="imprint__last">Not financial advice. Data only, no signals.</p>
+      </div>
+      <p class="vh" aria-live="polite" data-announce></p>
+    </footer>
+  </body>
+</html>

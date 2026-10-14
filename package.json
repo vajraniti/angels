@@ -1,0 +1,20 @@
+{
+  "name": "angels",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Live data screener for Binance USDⓈ-M XAUUSDT and CLUSDT perpetuals. Static site, no build step.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "fixtures": "node tests/fixtures/market-sim.mjs --write",
+    "harness": "node tools/dev-harness.mjs",
+    "assets": "python3 tools/process_assets.py",
+    "assets:check": "python3 tools/process_assets.py --check"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

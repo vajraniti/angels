@@ -1,0 +1,1126 @@
+/* XAU / CL perpetuals. Paper and ink, a 1-bit dissolve, one deep red used at most
+   twice per screen. Tokens and type follow design/BRIEF.md sections 2 and 3. */
+
+:root {
+  --paper: #fbfbf9;
+  --ink: #111111;
+  --ink-1bit: #000000;
+  --grey-far: #616161;
+  --grey-mincho: #8a8a8a;
+  --ghost: #dcdcdc;
+  --hair: #c8c8c8;
+  --red: #a3121c;
+
+  --m: 40px; /* outer margin, also the marginalia lane */
+  --tape-h: 41px;
+  --label: 10px; /* smallest label on desktop (critique: never below 10 px) */
+
+  --archivo: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --bodoni: 'Bodoni Moda', 'Bodoni 72', Didot, 'Times New Roman', serif;
+  --mincho: 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+  --script: 'Pinyon Script', 'Snell Roundhand', cursive;
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--archivo);
+  font-size: 13px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+i,
+em {
+  font-style: italic;
+}
+b {
+  font-weight: inherit;
+}
+a {
+  color: inherit;
+}
+button {
+  font: inherit;
+  color: inherit;
+}
+:focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.vh {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* Direction glyphs from the sprite: ▲ solid for up, ▽ hollow for down (brief 2). */
+.g {
+  display: inline-block;
+  width: 0.62em;
+  height: 0.62em;
+  vertical-align: 0.02em;
+  margin-right: 0.24em;
+  overflow: visible;
+}
+.g[hidden] {
+  display: none;
+}
+.g-s {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  vertical-align: -0.16em;
+  margin: 0 0.04em;
+}
+
+/* Wide caps label: Archivo 125, tracked (brief 3). */
+.caps,
+.tk b,
+.peri__l,
+.second__t,
+.agate dt,
+.marg,
+.roles button,
+.switch button {
+  font-stretch: 125%;
+  font-weight: 600;
+  font-size: var(--label);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ tape */
+
+.tape {
+  margin-top: 6px;
+  min-height: 34px;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  padding: 0 var(--m);
+  display: flex;
+  align-items: center;
+  gap: 0 22px;
+  position: relative;
+  z-index: 5;
+  background: var(--paper);
+}
+.tape__row {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 22px;
+}
+/* On a wide screen the two rows run as one line; the clock and status go right. */
+.tape__row--rest {
+  flex: 1;
+}
+.tk--time {
+  margin-left: auto;
+}
+.tk {
+  white-space: nowrap;
+  font-size: 12px;
+  font-stretch: 75%;
+  font-weight: 500;
+}
+.tk b {
+  margin-right: 0.55em;
+  letter-spacing: 0.26em;
+  font-size: var(--label);
+}
+.tk--status b {
+  margin: 0;
+}
+.tk .halo {
+  display: inline-block;
+  width: 16px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.tk__age {
+  margin-left: 0.6em;
+  color: var(--grey-far);
+}
+
+/* ------------------------------------------------------------------ hero */
+
+.hero {
+  position: relative;
+  height: calc(100svh - var(--tape-h));
+  min-height: 640px;
+  max-height: 1080px;
+  overflow: clip;
+  isolation: isolate;
+  background: var(--paper);
+}
+.hero__echo,
+.hero__ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* One dot is one CSS pixel; it must stay a square when the screen doubles it. */
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.hero__echo {
+  z-index: 0;
+}
+.crisp {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  color: var(--ink);
+  user-select: none;
+}
+.hero__ink {
+  z-index: 2;
+}
+.crisp--paper {
+  z-index: 3;
+  color: var(--paper);
+  visibility: hidden;
+  /* The mask has one pixel per dot; scaled up it must stay square-edged. */
+  image-rendering: pixelated;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+.crisp--paper.is-masked {
+  visibility: visible;
+}
+.geo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.geo text {
+  fill: currentColor;
+  font-family: var(--archivo);
+}
+.geo .n {
+  font-size: 15px;
+  font-stretch: 70%;
+  font-weight: 600;
+}
+.geo .l {
+  text-transform: uppercase;
+  font-size: var(--label);
+  font-stretch: 125%;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.geo .h {
+  font-size: var(--label);
+  font-stretch: 75%;
+  font-weight: 500;
+}
+.geo .red {
+  fill: var(--red);
+  stroke: none;
+}
+.geo .dag {
+  font-family: var(--bodoni);
+  font-size: 15px;
+  font-weight: 400;
+}
+.geo .stroke {
+  fill: none;
+  stroke: currentColor;
+}
+.geo .redstroke {
+  fill: none;
+  stroke: var(--red);
+}
+
+.is-empty .pricebox {
+  visibility: hidden;
+}
+.pricebox {
+  position: absolute;
+  right: -1.7vw;
+  top: var(--price-top, 46%);
+}
+.price {
+  margin: 0;
+  font-family: var(--bodoni);
+  font-weight: 400;
+  font-size: 18.6vw;
+  line-height: 0.78;
+  font-optical-sizing: auto;
+  font-variation-settings: 'opsz' 96;
+  letter-spacing: -0.012em;
+  white-space: nowrap;
+}
+[data-main='CLUSDT'] .price {
+  font-size: 22vw;
+}
+[data-main='CLUSDT'] .pricebox {
+  right: -3vw;
+}
+/* A thin space at display sizes reads as no gap at all; groups get a real one. */
+.price .grp + .grp {
+  margin-left: 0.17em;
+}
+.second__p .grp + .grp,
+.p2__price .grp + .grp {
+  margin-left: 0.12em;
+}
+.change {
+  margin: 0.32em 0 0 0.04em;
+  font-size: 34px;
+  line-height: 1;
+  font-stretch: 62%;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.change .g {
+  width: 0.4em;
+  height: 0.4em;
+  vertical-align: 0.34em;
+}
+.change__pct {
+  font-weight: 400;
+  margin-left: 0.18em;
+}
+
+.script {
+  position: absolute;
+  left: var(--script-x, 22.5vw);
+  top: var(--script-y, 8%);
+  margin: 0;
+  font-family: var(--script);
+  font-size: clamp(90px, 10.5vw, 160px);
+  line-height: 1;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  letter-spacing: 0.01em;
+}
+
+.roles {
+  position: absolute;
+  z-index: 4;
+  left: calc(var(--m) - 6px);
+  top: 14px;
+  display: flex;
+  align-items: baseline;
+}
+.roles button,
+.switch button {
+  appearance: none;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 6px;
+  cursor: pointer;
+  color: var(--grey-far);
+}
+.roles button[aria-pressed='true'],
+.switch button[aria-pressed='true'] {
+  color: var(--ink);
+}
+.roles button[aria-pressed='true']::before,
+.switch button[aria-pressed='true']::before {
+  content: '[';
+  margin-right: 0.18em;
+  font-weight: 300;
+}
+.roles button[aria-pressed='true']::after,
+.switch button[aria-pressed='true']::after {
+  content: ']';
+  margin-left: 0.18em;
+  font-weight: 300;
+}
+.roles button:hover,
+.switch button:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.roles__bar,
+.switch__bar {
+  color: var(--grey-far);
+  font-weight: 300;
+}
+
+.marg {
+  position: absolute;
+  z-index: 4;
+  left: 13px;
+  bottom: 7%;
+  margin: 0;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: nowrap;
+  letter-spacing: 0.28em;
+}
+
+/* Small type on the perimeter knocks the mass's stray grain out around its own
+   letter shapes (a paper stroke painted under the fill), so it stays legible
+   where a stormy mass scatters dots across the edges. */
+.roles button,
+.peri,
+.marg,
+.mincho,
+.second__t,
+.second__go {
+  -webkit-text-stroke: 3px var(--paper);
+  paint-order: stroke fill;
+}
+
+/* Perimeter: numbers set along the edges, each with a one-word rotated label. */
+.peri {
+  position: absolute;
+  z-index: 4;
+  margin: 0;
+  white-space: nowrap;
+  font-size: 15px;
+  line-height: 1;
+}
+.peri__l {
+  color: var(--ink);
+}
+.peri__v {
+  font-stretch: 70%;
+  font-weight: 600;
+}
+.peri small {
+  margin-inline-start: 0.3em;
+  font-size: var(--label);
+  font-stretch: 100%;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+.peri__eq {
+  margin-inline: 0.4em;
+  font-weight: 300;
+}
+.peri--vol {
+  left: 35vw;
+  top: 26px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.peri--vol .peri__l {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  line-height: 1;
+}
+/* Open interest climbs the right edge, reading upward like the left margin. */
+.peri--oi {
+  right: 26px;
+  top: 26px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  display: flex;
+  align-items: center;
+}
+.peri--oi .peri__l {
+  margin-inline-end: 10px;
+}
+
+.mincho {
+  position: absolute;
+  z-index: 4;
+  right: 62px;
+  top: 26px;
+  writing-mode: vertical-rl;
+  font-family: var(--mincho);
+  font-size: 15px;
+  line-height: 2;
+  letter-spacing: 0.32em;
+  color: var(--grey-mincho);
+}
+.mincho span {
+  display: block;
+}
+
+.hero__notice {
+  position: absolute;
+  z-index: 4;
+  left: 35vw;
+  bottom: 7%;
+  max-width: 46ch;
+  margin: 0;
+  font-family: var(--bodoni);
+  font-size: 15px;
+  line-height: 1.4;
+  font-variation-settings: 'opsz' 14;
+}
+.hero__notice[hidden] {
+  display: none;
+}
+.hero__notice-h {
+  display: block;
+  font-style: italic;
+}
+.hero__notice-d {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--archivo);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--grey-far);
+}
+
+/* The secondary instrument: small, bottom right, a pointer to its plate. */
+.second {
+  position: absolute;
+  z-index: 4;
+  right: var(--m);
+  bottom: 6%;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 12px;
+  align-items: end;
+  text-decoration: none;
+}
+.second__t {
+  grid-column: 1 / 3;
+  margin-bottom: 8px;
+}
+.second__p {
+  font-family: var(--bodoni);
+  font-size: 54px;
+  line-height: 0.8;
+  font-variation-settings: 'opsz' 72;
+}
+.second__c {
+  font-size: 15px;
+  line-height: 1;
+  font-stretch: 70%;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.second__go {
+  grid-column: 1 / 3;
+  margin-top: 8px;
+  font-family: var(--bodoni);
+  font-style: italic;
+  font-size: 14px;
+}
+.second:hover .second__go {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---------------------------------------------------------------- states */
+
+/* Stale: the figures that are no longer live break into a mosaic; the small ones,
+   which a mosaic would erase, fade to the far grey instead. */
+[data-status='stale'] .price,
+[data-status='stale'] .p2__price {
+  filter: url(#mosaic-8);
+}
+[data-status='stale'] .second__p {
+  filter: url(#mosaic-4);
+}
+[data-status='stale'] .change {
+  filter: url(#mosaic-2);
+}
+[data-status='stale'] :is(.peri__v, .tk span[data-v], .agate dd, .second__c, .geo .n) {
+  color: var(--grey-far);
+  fill: var(--grey-far);
+}
+[data-status='stale'] .tk--status b {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+/* Loading: the first figures come into focus from coarse blocks (600 ms, set by JS). */
+[data-reveal='8'] :is(.price, .p2__price) {
+  filter: url(#mosaic-8);
+}
+[data-reveal='4'] :is(.price, .p2__price, .second__p, .change) {
+  filter: url(#mosaic-4);
+}
+[data-reveal='2'] :is(.price, .p2__price, .second__p, .change) {
+  filter: url(#mosaic-2);
+}
+
+/* ---------------------------------------------------------------- plate I */
+
+.plate {
+  position: relative;
+  padding: 96px var(--m) 40px;
+}
+.plate__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 28px;
+  margin-bottom: 14px;
+}
+.plate__cap,
+.p2__cap {
+  margin: 0 auto 0 0;
+  font-family: var(--bodoni);
+  font-weight: 400;
+  font-size: 17px;
+  font-variation-settings: 'opsz' 14;
+}
+.plate__cap i,
+.p2__cap i {
+  margin-right: 0.25em;
+}
+.switch {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.switch--tf button {
+  font-size: 12px;
+  font-stretch: 100%;
+  letter-spacing: 0.06em;
+  text-transform: none;
+}
+.plate__body {
+  position: relative;
+}
+.plate__mincho {
+  position: absolute;
+  left: -29px;
+  top: 4px;
+  margin: 0;
+  writing-mode: vertical-rl;
+  font-family: var(--mincho);
+  font-size: 13px;
+  letter-spacing: 0.34em;
+  color: var(--grey-mincho);
+}
+.plate__frame {
+  position: relative;
+  border: 1px solid var(--ink);
+  padding: 3px;
+}
+.plate__frame::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 0.5px solid var(--ink);
+  pointer-events: none;
+}
+.plate__canvas {
+  display: block;
+  width: 100%;
+  height: clamp(360px, 58vh, 560px);
+  cursor: crosshair;
+  touch-action: pan-y;
+}
+.plate__msg {
+  position: absolute;
+  left: 32px;
+  top: 40%;
+  max-width: 56ch;
+  margin: 0;
+  font-family: var(--bodoni);
+  font-style: italic;
+  font-size: 15px;
+  font-variation-settings: 'opsz' 14;
+}
+.plate__msg[hidden] {
+  display: none;
+}
+.plate__fig {
+  position: absolute;
+  right: 14px;
+  bottom: 32px;
+  font-family: var(--bodoni);
+  font-size: 12px;
+  pointer-events: none;
+}
+.plate__ohlc {
+  margin: 10px 0 0;
+  min-height: 1.5em;
+  font-family: var(--bodoni);
+  font-style: italic;
+  font-size: 14px;
+  font-variation-settings: 'opsz' 14;
+}
+.plate__ohlc span {
+  white-space: nowrap;
+}
+.plate__ohlc b {
+  margin: 0 0.3em 0 0.9em;
+  font-family: var(--archivo);
+  font-style: normal;
+  font-stretch: 75%;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.plate__note {
+  margin: 4px 0 0;
+  max-width: 76ch;
+  font-size: 11px;
+  color: var(--grey-far);
+}
+
+/* --------------------------------------------------------------- plate II */
+
+.p2 {
+  position: relative;
+  /* The foot leaves room for the vignette that stands on the imprint's rule. */
+  padding: 80px var(--m) 220px;
+  overflow: clip;
+  --em-w: 400px; /* emblem width, shown 1:1 */
+  --bleed: 128px; /* how much of it runs off the left edge */
+  --em-x: calc(-1 * var(--m) - var(--bleed)); /* emblem left, in body coordinates */
+  --sq-r: calc(var(--em-x) + var(--em-w) * 0.945); /* right edge of Fludd's black square */
+  --p2-price-x: calc(var(--sq-r) - 0.62em);
+  --p2-price-y: 128px;
+}
+.p2__cap {
+  margin-bottom: 26px;
+}
+.p2__body {
+  position: relative;
+  display: grid;
+  grid-template-columns: calc(var(--em-x) + var(--em-w)) minmax(0, 440px) 1fr;
+  min-height: 430px;
+}
+.p2__emblem {
+  grid-column: 1;
+  margin: 0 0 0 var(--em-x);
+  width: var(--em-w);
+}
+.p2__emblem img {
+  display: block;
+  width: var(--em-w);
+  height: auto;
+  mix-blend-mode: multiply;
+}
+.p2__emblem figcaption {
+  margin: 10px 0 0 calc(-1 * var(--em-x));
+  max-width: 30ch;
+  font-family: var(--bodoni);
+  font-size: 12px;
+  font-variation-settings: 'opsz' 9;
+  color: var(--grey-far);
+}
+/* The price straddles the black square's edge: paper on the darkness, ink beyond it. */
+.p2__price {
+  position: absolute;
+  left: 0;
+  top: var(--p2-price-y);
+  font-family: var(--bodoni);
+  font-size: 128px;
+  line-height: 1;
+  font-variation-settings: 'opsz' 96;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.p2__price-ink,
+.p2__price-paper {
+  position: absolute;
+  left: var(--p2-price-x);
+  top: 0;
+}
+.p2__price-ink {
+  color: var(--ink);
+  clip-path: inset(-0.2em -2em -0.2em calc(var(--sq-r) - var(--p2-price-x)));
+}
+.p2__price-paper {
+  color: var(--paper);
+  clip-path: inset(-0.2em calc(100% - (var(--sq-r) - var(--p2-price-x))) -0.2em -0.2em);
+}
+[data-emblem='light'] .p2__price-paper {
+  display: none;
+}
+[data-emblem='light'] .p2__price-ink {
+  clip-path: none;
+  left: calc(var(--sq-r) + 24px);
+}
+.p2__data {
+  grid-column: 2;
+  padding: calc(var(--p2-price-y) + 128px) 0 0 32px;
+}
+.p2__change {
+  margin: 0 0 22px;
+  font-size: 15px;
+  font-stretch: 70%;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.p2__mincho {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  margin: 0;
+  writing-mode: vertical-rl;
+  font-family: var(--mincho);
+  font-size: 14px;
+  line-height: 2.1;
+  letter-spacing: 0.32em;
+  color: var(--grey-mincho);
+}
+.p2__mincho span {
+  display: block;
+}
+
+/* Agate list with dotted leaders, figures right-aligned (brief 5.3). */
+.agate {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  font-size: 13.5px;
+  font-stretch: 75%;
+}
+.agate dt,
+.agate dd {
+  margin: 0;
+  padding: 5px 0 4px;
+}
+.agate dt {
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.agate dt::after {
+  content: '';
+  flex: 1;
+  margin: 0 6px 0 8px;
+  border-bottom: 1px dotted var(--ink);
+  transform: translateY(-3px);
+}
+.agate dd {
+  text-align: right;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.agate .rule {
+  border-top: 1px solid var(--ink);
+}
+.dagger {
+  margin-left: 0.12em;
+  color: var(--red);
+  font-family: var(--bodoni);
+  font-size: 0.95em;
+  text-decoration: none;
+  vertical-align: 0.35em;
+  line-height: 0;
+}
+
+.rangebar {
+  display: block;
+  grid-column: 2 / -1;
+  width: calc(100% - 32px);
+  height: 86px;
+  margin: 34px 0 0 32px;
+  overflow: visible;
+}
+.rangebar text {
+  font-family: var(--archivo);
+  font-size: 12px;
+  font-stretch: 75%;
+  font-weight: 500;
+  fill: var(--ink);
+}
+.rangebar .cap {
+  font-size: var(--label);
+  font-stretch: 125%;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.rangebar .it {
+  font-family: var(--bodoni);
+  font-style: italic;
+  font-size: 13px;
+  font-stretch: 100%;
+  font-weight: 400;
+}
+
+/* ---------------------------------------------------------------- imprint */
+
+.imprint {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 84ch) 1fr;
+  column-gap: 48px;
+  margin: 0 var(--m);
+  padding: 34px 0 30px;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  margin-bottom: 28px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.imprint__text {
+  grid-column: 1;
+  grid-row: 1;
+}
+.imprint__text p {
+  margin: 0 0 7px;
+}
+.imprint__credits {
+  color: var(--grey-far);
+}
+.imprint__last {
+  margin-top: 14px !important;
+}
+/* The vignette sits on the rule like a printer's device, off the text's axis. */
+.imprint__vignette {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: start;
+  /* Resting on the rule: the engraving's foot meets the line, the caption hangs below. */
+  margin: calc(-143px - 34px) 0 0 8%;
+  width: 156px;
+}
+.imprint__vignette img {
+  display: block;
+  width: 156px;
+  height: auto;
+}
+.imprint__vignette figcaption {
+  margin-top: 8px;
+  font-family: var(--bodoni);
+  font-size: 11.5px;
+  line-height: 1.35;
+  font-variation-settings: 'opsz' 9;
+  color: var(--grey-far);
+}
+
+/* A tall, narrow window would leave the collage floating in empty paper. */
+@media (min-width: 761px) and (max-aspect-ratio: 1/1) {
+  .hero {
+    max-height: max(640px, 100vw);
+  }
+}
+
+/* ------------------------------------------------------------ narrower desktops */
+
+@media (min-width: 761px) and (max-width: 1180px) {
+  .peri--oi {
+    display: none;
+  }
+  .mincho {
+    right: 26px;
+  }
+  .second__p {
+    font-size: 44px;
+  }
+  .p2 {
+    --bleed: 200px;
+  }
+}
+
+/* ------------------------------------------------------------------ mobile */
+
+@media (max-width: 760px) {
+  :root {
+    --m: 16px;
+    --tape-h: 58px;
+    --label: 11px;
+  }
+  body {
+    font-size: 13px;
+  }
+
+  .tape {
+    display: block;
+    padding: 5px var(--m) 6px;
+  }
+  .tape__row {
+    gap: 2px 14px;
+  }
+  /* Two fixed lines: funding lives in the hero, the age in the hero's notice. */
+  .tape :is(.tk--funding, .tk__age) {
+    display: none;
+  }
+  [data-status='stale'] .price {
+    filter: url(#mosaic-4);
+  }
+  .tk--time {
+    margin-left: 0;
+  }
+
+  .hero {
+    height: calc(100svh - var(--tape-h));
+    min-height: 660px;
+    max-height: 860px;
+  }
+  .price {
+    font-size: 25vw;
+  }
+  [data-main='CLUSDT'] .price {
+    font-size: 30vw;
+  }
+  .pricebox {
+    right: -3.4vw;
+  }
+  .change {
+    font-size: 28px;
+  }
+  .script {
+    font-size: 22vw;
+  }
+  .mincho,
+  .marg {
+    display: none;
+  }
+  .roles {
+    top: 6px;
+  }
+  .peri--vol {
+    left: auto;
+    right: var(--m);
+    top: 14px;
+    font-size: 13px;
+  }
+  .peri--vol .peri__l {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+  .peri--oi {
+    position: absolute;
+    right: var(--m);
+    left: var(--m);
+    top: var(--below-price, 70%);
+    bottom: auto;
+    writing-mode: horizontal-tb;
+    transform: none;
+    display: block;
+    font-size: 13px;
+    white-space: normal;
+  }
+  .peri--oi .peri__l {
+    display: block;
+    margin: 0 0 4px;
+  }
+  .hero__notice {
+    left: var(--m);
+    right: var(--m);
+    top: calc(var(--below-price, 70%) + 52px);
+    bottom: auto;
+    max-width: none;
+  }
+  .second {
+    left: var(--m);
+    right: auto;
+    bottom: 22px;
+  }
+  /* With nothing loaded the notice is the content: the empty blocks give way. */
+  :is([data-status='error'], [data-status='connecting']) :is(.hero .peri--oi, .hero .second) {
+    display: none;
+  }
+  :is([data-status='error'], [data-status='connecting']) .hero__notice {
+    top: var(--below-price, 70%);
+  }
+  .second__p {
+    font-size: 44px;
+  }
+
+  .plate {
+    padding: 64px var(--m) 32px;
+  }
+  .plate__head {
+    gap: 6px 16px;
+  }
+  .plate__cap {
+    flex-basis: 100%;
+    font-size: 16px;
+  }
+  .plate__mincho {
+    display: none;
+  }
+  .plate__canvas {
+    height: 400px;
+  }
+  .switch button {
+    padding: 8px 5px;
+  }
+
+  .p2 {
+    padding: 56px var(--m) 72px;
+    --em-w: 216px;
+    --bleed: 0px;
+    --p2-price-y: 64px;
+  }
+  .p2__body {
+    display: block;
+    min-height: 0;
+  }
+  .p2__emblem {
+    margin-left: calc(-1 * var(--m) - 24px);
+  }
+  .p2 {
+    --em-x: calc(-1 * var(--m) - 24px);
+  }
+  .p2__emblem figcaption {
+    margin-left: calc(var(--m) + 24px);
+  }
+  .p2__price {
+    font-size: 72px;
+  }
+  .p2__data {
+    padding: 28px 0 0;
+  }
+  /* Gold's emblem is light line work: no inversion to borrow, and no room beside it
+     on a phone, so the price sets under the emblem, whole. */
+  [data-emblem='light'] :is(.p2__price, .p2__price-ink) {
+    position: static;
+  }
+  [data-emblem='light'] .p2__price {
+    margin-top: 14px;
+  }
+  .p2__mincho {
+    display: none;
+  }
+  .rangebar {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .imprint {
+    grid-template-columns: 1fr;
+    row-gap: 18px;
+    padding-top: 26px;
+  }
+  .imprint__vignette {
+    grid-column: 1;
+    grid-row: 2;
+    margin: 0 0 0 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] * {
+    filter: none !important;
+  }
+}

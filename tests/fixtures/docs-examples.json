@@ -1,0 +1,155 @@
+{
+  "_note": "Example payloads copied verbatim from the official Binance USDS-M Futures docs on 2026-10-13. Parsers are tested against these exact shapes.",
+  "ticker24hr": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#ticker24hr-price-change-statistics",
+    "body": {
+      "symbol": "BTCUSDT",
+      "priceChange": "-94.99999800",
+      "priceChangePercent": "-95.960",
+      "weightedAvgPrice": "0.29628482",
+      "lastPrice": "4.00000200",
+      "lastQty": "200.00000000",
+      "openPrice": "99.00000000",
+      "highPrice": "100.00000000",
+      "lowPrice": "0.10000000",
+      "volume": "8913.30000000",
+      "quoteVolume": "15.30000000",
+      "openTime": 1499783499040,
+      "closeTime": 1499869899040,
+      "firstId": 28385,
+      "lastId": 28460,
+      "count": 76
+    }
+  },
+  "premiumIndex": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#mark-price",
+    "body": {
+      "symbol": "BTCUSDT",
+      "markPrice": "11793.63104562",
+      "indexPrice": "11781.80495970",
+      "estimatedSettlePrice": "11781.16138815",
+      "lastFundingRate": "0.00038246",
+      "interestRate": "0.00010000",
+      "nextFundingTime": 1597392000000,
+      "time": 1597370495002
+    }
+  },
+  "openInterest": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#open-interest",
+    "body": { "openInterest": "10659.509", "symbol": "BTCUSDT", "time": 1589437530011 }
+  },
+  "fundingInfo": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#get-funding-rate-info",
+    "body": [
+      {
+        "symbol": "BLZUSDT",
+        "adjustedFundingRateCap": "0.02500000",
+        "adjustedFundingRateFloor": "-0.02500000",
+        "fundingIntervalHours": 8,
+        "disclaimer": false
+      }
+    ]
+  },
+  "klines": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#kline-candlestick-data",
+    "body": [
+      [
+        1499040000000,
+        "0.01634790",
+        "0.80000000",
+        "0.01575800",
+        "0.01577100",
+        "148976.11427815",
+        1499644799999,
+        "2434.19055334",
+        308,
+        "1756.87402397",
+        "28.46694368",
+        "17928899.62484339"
+      ]
+    ]
+  },
+  "serverTime": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#check-server-time",
+    "body": { "serverTime": 1499827319559 }
+  },
+  "errorPayload": {
+    "source": "https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info",
+    "body": { "code": -1121, "msg": "Invalid symbol." }
+  },
+  "tickerEvent": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market (Individual Symbol Ticker Streams, <symbol>@ticker)",
+    "data": {
+      "e": "24hrTicker",
+      "E": 123456789,
+      "s": "BNBUSDT",
+      "p": "0.0015",
+      "P": "250.00",
+      "w": "0.0018",
+      "c": "0.0025",
+      "Q": "10",
+      "o": "0.0010",
+      "h": "0.0025",
+      "l": "0.0010",
+      "v": "10000",
+      "q": "18",
+      "O": 0,
+      "C": 86400000,
+      "F": 0,
+      "L": 18150,
+      "n": 18151,
+      "ps": "BTCUSDT",
+      "st": 1
+    }
+  },
+  "markPriceEvent": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market (Mark Price Stream, <symbol>@markPrice@1s)",
+    "data": {
+      "e": "markPriceUpdate",
+      "E": 1562305380000,
+      "s": "BTCUSDT",
+      "p": "11794.15000000",
+      "i": "11784.62659091",
+      "P": "11784.25641265",
+      "r": "0.00038167",
+      "ap": "11794.15000000",
+      "T": 1562306400000,
+      "st": 1
+    }
+  },
+  "klineEvent": {
+    "source": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/ws-streams/market (Kline/Candlestick Streams, <symbol>@kline_<interval>)",
+    "data": {
+      "e": "kline",
+      "E": 1638747660000,
+      "s": "BTCUSDT",
+      "k": {
+        "t": 1638747660000,
+        "T": 1638747719999,
+        "s": "BTCUSDT",
+        "i": "1m",
+        "f": 100,
+        "L": 200,
+        "o": "0.0010",
+        "c": "0.0020",
+        "h": "0.0025",
+        "l": "0.0015",
+        "v": "1000",
+        "n": 100,
+        "x": false,
+        "q": "1.0000",
+        "V": "500",
+        "Q": "0.500",
+        "B": "123456"
+      }
+    }
+  },
+  "subscribeResponse": {
+    "source": "https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Live-Subscribing-Unsubscribing-to-streams",
+    "body": { "result": null, "id": 1 }
+  },
+  "combinedWrapper": {
+    "source": "https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect",
+    "shape": "{\"stream\":\"<streamName>\",\"data\":<rawPayload>}"
+  }
+}
